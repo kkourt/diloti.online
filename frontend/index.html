@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
+
+    <meta name="description" content="">
+
+    <link rel="icon" type="image/png" href="/public/favicon.png">
+
+    <style>
+    .card {
+      display: inline-block;
+      border: 2px solid;
+      padding: 2px;
+      border-color: black;
+      background-color: white;
+      margin-right: 10px;
+      margin-left: 10px;
+      width: 60px;
+      text-align: right;
+      height:100px;
+    }
+
+    .red {
+      color: red;
+    }
+
+    .black {
+      color: black;
+    }
+
+
+    .hand .card:hover {
+      background-color: #EFF2FB;
+    }
+
+    .hand {
+      float: left;
+      border-color: black;
+      background-color: white;
+    }
+
+    .table {
+      float: left;
+      border-color: black;
+      background-color: green;
+      padding-top: 15px;
+      padding-bottom: 15px;
+    }
+
+    .container {
+      float: none;
+      height: 170px;
+    }
+    </style>
+    <title>Δηλωτή online</title>
+    </head>
+
+    <body>
+        <h2> Δηλωτή online </h2>
+        <section id="app"></section>
+        <script type="module">
+            // https://rustwasm.github.io/docs/wasm-bindgen/examples/without-a-bundler.html
+            import init from '/pkg/package.js';
+            init('/pkg/package_bg.wasm');
+        </script>
+    </body>
+
+</html>
