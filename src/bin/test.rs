@@ -1,4 +1,4 @@
-use core::game::{Game,Action,GameState,PlayerGameView};
+use core::game::{Game,PlayerGameView};
 
 fn pr_view(v: &PlayerGameView) {
     println!("Player: {}", v.pid);
@@ -15,18 +15,19 @@ fn main() {
     loop {
         let turn = game.start_player_turn();
         pr_view(&turn.game_view);
-        break;
 
         //
         // TODO: input from player
         // ...
-        let act = unimplemented!();
+        let _act = unimplemented!();
 
-        match game.end_player_turn(turn, act) {
-            Err(x) => (),
+        /*
+        match game.end_player_turn(turn, _act) {
+            Err(_x) => (),
             Ok(GameState::NextPlayer(_)) => (),
             Ok(GameState::RoundDone) => (),
             Ok(GameState::GameDone) => (),
         }
+        */
     }
 }

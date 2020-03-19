@@ -23,11 +23,18 @@ pub enum Suite {
 pub struct Rank(u8);
 
 /// Game card
-#[derive(PartialEq,Eq)]
+#[derive(PartialEq, Eq, Clone)]
 pub struct Card {
     pub suite: Suite,
     pub rank: Rank,
 }
+
+#[derive(PartialEq,Eq, Copy, Clone)]
+pub struct CardClone {
+    pub suite: Suite,
+    pub rank: Rank,
+}
+
 
 // TODO: Implement this for other integer types as well. Use a macro.
 impl TryFrom<u8> for Rank {
@@ -54,6 +61,14 @@ impl Rank {
             _ => panic!("Invalid rank"),
         }
     }
+
+    pub fn is_figure(&self) -> bool {
+        match self.0 {
+            1..=10 => false,
+            11..=13 => true,
+            _ => panic!("Invalid rank"),
+        }
+    }
 }
 
 impl Suite {
@@ -72,6 +87,15 @@ impl Suite {
             Self::Club => '♣',
             Self::Heart => '♥',
             Self::Diamond => '♦',
+        }
+    }
+}
+
+impl Card {
+    pub fn get_clone(&self) -> CardClone {
+        CardClone {
+            suite: self.suite,
+            rank: self.rank,
         }
     }
 }
@@ -129,6 +153,18 @@ impl std::fmt::Display for Card {
 }
 
 impl std::fmt::Debug for Card {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        f.write_fmt(format_args!("{}{}", self.suite.to_symbol(), self.rank.to_symbol()))
+    }
+}
+
+impl std::fmt::Display for CardClone {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        f.write_fmt(format_args!("{}{}", self.suite.to_symbol(), self.rank.to_symbol()))
+    }
+}
+
+impl std::fmt::Debug for CardClone {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         f.write_fmt(format_args!("{}{}", self.suite.to_symbol(), self.rank.to_symbol()))
     }

@@ -15,6 +15,17 @@ use super::card::Card;
 // "lost" when the game is played. The state of each card is implicit in which container it is
 // stored in.
 
+// NB: User messages and actions need to refer to objects in the game state (e.g., cards)
+// I use indices in the game state array together with a version number as a sanity check.
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+pub struct GameVer(u64);
+
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+pub struct HandCardIdx(usize, GameVer);
+
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+pub struct TableEntryIdx(usize, GameVer);
+
 pub struct Player {
     pub hand: Deck,
 }
@@ -22,17 +33,20 @@ pub struct Player {
 #[derive(Copy, Clone, PartialEq, Eq)]
 pub struct PlayerId(pub u8);
 
+#[derive(Clone)]
 pub struct Declaration {
     cards: Vec<Vec<Card>>,
     player: PlayerId,
     sum: u8,
 }
 
+#[derive(Clone)]
 pub enum TableEntry {
     Card(Card),
     Decl(Declaration),
 }
 
+#[derive(Clone)]
 pub struct  Table {
     pub entries: Vec<TableEntry>,
 }
@@ -45,31 +59,34 @@ pub struct Game<R: rand::Rng> {
     pub turn: PlayerId,
 
     rng: R,
+    ver: GameVer,
 }
 
-pub enum Action {
-    Play,
+#[derive(Debug)]
+pub enum PlayerAction {
+    Play(HandCardIdx),
     DeclareWith,
     TakeWith,
 }
 
 pub struct InvalidAction {
-    action: Action,
+    action: PlayerAction,
     reason: String,
 }
 
-/// This is the view from a given player's point of view
-pub struct PlayerGameView<'a> {
+/// This a player's point of view of the game
+pub struct PlayerGameView {
     pub pid: PlayerId,
-    pub table: &'a Table,
-    pub own_hand: &'a Deck,
+    pub table: Table,
+    pub own_hand: Deck,
+    pub ver: GameVer,
 
     pub main_deck_sz: usize,
     pub player_decks_sz: Vec<usize>,
 }
 
-pub struct PlayerTurn<'a> {
-    pub game_view: PlayerGameView<'a>,
+pub struct PlayerTurn {
+    pub game_view: PlayerGameView,
 }
 
 // Some terminology:
@@ -110,6 +127,7 @@ impl<R: rand::Rng> Game<R> {
             players: (0..nplayers).map( |_i| Player { hand: Deck::empty() } ).collect(),
             turn: PlayerId(0),
             rng: rng,
+            ver: GameVer(0),
         };
 
         game.deal();
@@ -136,21 +154,54 @@ impl<R: rand::Rng> Game<R> {
 
     }
 
-    pub fn start_player_turn(&self) -> PlayerTurn {
-        PlayerTurn {
-            game_view: PlayerGameView {
-                pid: self.turn,
-                table: &self.table,
-                own_hand: &self.players[self.turn.0 as usize].hand,
+    pub fn get_player_game_view(&self) -> PlayerGameView {
+        PlayerGameView {
+            pid: self.turn,
+            table: self.table.clone(),
+            own_hand: self.players[self.turn.0 as usize].hand.clone(),
+            ver: self.ver,
 
-                main_deck_sz: self.main_deck.ncards(),
-                player_decks_sz: self.players.iter().map(|p| p.hand.ncards()).collect(),
-            }
+            main_deck_sz: self.main_deck.ncards(),
+            player_decks_sz: self.players.iter().map(|p| p.hand.ncards()).collect(),
         }
     }
 
-    pub fn  end_player_turn(&self, turn: PlayerTurn, action: Action) -> Result<GameState, InvalidAction> {
+    pub fn start_player_turn(&self) -> PlayerTurn {
+        PlayerTurn {
+            game_view: self.get_player_game_view(),
+        }
+    }
+
+    pub fn  end_player_turn(&self, turn: PlayerTurn, action: PlayerAction) -> Result<GameState, InvalidAction> {
         unimplemented!()
+    }
+
+}
+
+impl PlayerGameView {
+
+    pub fn get_hand_card(&self, cidx: &HandCardIdx) -> &Card {
+        let HandCardIdx(idx, ver) = cidx;
+        if *ver != self.ver {
+            panic!("mismatching versions: {:?} vs {:?}", ver, self.ver);
+        }
+        &self.own_hand.cards[*idx]
+    }
+
+    pub fn iter_hand_cards(&self) -> impl Iterator<Item=(HandCardIdx, &Card)> {
+        let ver = self.ver;
+        self.own_hand.cards
+            .iter()
+            .enumerate()
+            .map(move |(i,c)| (HandCardIdx(i, ver), c))
+    }
+
+    pub fn iter_table_entries(&self) -> impl Iterator<Item=(TableEntryIdx, &TableEntry)> {
+        let ver = self.ver;
+        self.table.entries
+            .iter()
+            .enumerate()
+            .map(move |(i,e)| (TableEntryIdx(i, ver), e))
     }
 
 }

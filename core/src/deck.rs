@@ -11,6 +11,7 @@ use std::convert::TryFrom;
 use super::card::{Rank,Suite,Card};
 
 /// A Deck is an ordered collection of cards
+#[derive(Clone)]
 pub struct Deck {
     pub cards: Vec<Card>,
 }

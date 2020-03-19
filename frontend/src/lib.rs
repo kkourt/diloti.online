@@ -4,7 +4,9 @@ extern crate rand_pcg;
 
 use seed::{*, prelude::*};
 use rand::SeedableRng;
-use core::{deck::Deck, card::Card, game::Game, game::TableEntry};
+use core::{deck::Deck,
+           card::Card,
+           game::{Game, PlayerGameView, TableEntry, GameVer, HandCardIdx, TableEntryIdx, PlayerAction}};
 
 type XRng = rand_pcg::Pcg64;
 
@@ -34,17 +36,43 @@ impl InitSt {
 }
 
 
-/// Game state
+/// Game states
+
+struct TableSelection {
+    curent: Vec<usize>,
+    existing: Vec<Vec<usize>>,
+    ver: GameVer,
+}
+
+enum TurnProgress {
+    Nothing,
+    CardSelected(HandCardIdx),
+    DeclaringWith(HandCardIdx, TableSelection),
+    GatheringWith(HandCardIdx, TableSelection),
+    ActionIssued(PlayerAction),
+}
+
+enum GamePhase {
+    MyTurn(TurnProgress),
+    OthersTurn,
+}
 
 struct GameSt {
     pub game: Game<XRng>,
+    pub phase: GamePhase,
+    pub view: PlayerGameView,
 }
+
 
 impl Default for GameSt {
     fn default() -> Self {
         let rng = XRng::from_rng(rand::rngs::OsRng).expect("unable to initalize RNG");
+        let game = Game::new_2p(rng);
+        let view = game.get_player_game_view();
         Self {
-            game: Game::new_2p(rng),
+            game: game,
+            view: view,
+            phase: GamePhase::MyTurn(TurnProgress::Nothing),
         }
     }
 }
@@ -58,12 +86,35 @@ impl Default for Model {
 
 #[derive(Clone)]
 enum InGameMsg {
+    ClickHandCard(HandCardIdx),
+    PutDown(HandCardIdx),
+    TakeWith(HandCardIdx),
+    DeclareWith(HandCardIdx),
 }
 
 
 impl GameSt {
     fn update_state(&mut self, msg: &InGameMsg) -> Option<Model> {
-        unimplemented!()
+        match msg {
+            InGameMsg::ClickHandCard(x) => {
+                self.phase = GamePhase::MyTurn(TurnProgress::CardSelected(*x));
+            }
+
+            InGameMsg::PutDown(x) => {
+                let action = PlayerAction::Play(*x);
+                self.issue_action(&action);
+                self.phase = GamePhase::MyTurn(TurnProgress::ActionIssued(action));
+            }
+
+            _ => unimplemented!(),
+        }
+
+        None
+    }
+
+    fn issue_action(&self, act: &PlayerAction) {
+        // TODO
+        log(format!("Issuing action: {:?}", act));
     }
 
     fn mk_card_div(&self, card: &Card) -> Node<Msg> {
@@ -89,25 +140,11 @@ impl GameSt {
 
     fn view(&self) -> Node<Msg> {
 
-        let p_id = self.game.turn.0;
-        let hand = {
-            let p_hand = &self.game.players[p_id as usize].hand;
-            let mut cards: Vec<Node<Msg>> = vec![];
-
-            for card in p_hand.cards.iter() {
-                let c = self.mk_card_div(card);
-                cards.push(c)
-            }
-            div![
-                attrs!{At::Class => "container"},
-                p!["Hand"],
-                div![ attrs!{At::Class => "hand"}, cards],
-            ]
-        };
+        // let p_id = self.game.turn.0;
 
         let table = {
             let mut entries: Vec<Node<Msg>> = vec![];
-            for entry in self.game.table.entries.iter() {
+            for (_eidx, entry) in self.view.iter_table_entries() {
                 let e = self.mk_table_entry_div(entry);
                 entries.push(e)
             }
@@ -118,7 +155,63 @@ impl GameSt {
             ]
         };
 
-        div![ table, hand ]
+        let hand = {
+            let mut cards: Vec<Node<Msg>> = vec![];
+            for (cidx, card) in self.view.iter_hand_cards() {
+                let mut c_div = self.mk_card_div(card);
+                c_div.add_listener(
+                    simple_ev(Ev::Click, Msg::InGame(InGameMsg::ClickHandCard(cidx)))
+                );
+                cards.push(c_div);
+            }
+
+            div![
+                attrs!{At::Class => "container"},
+                p!["Hand"],
+                div![ attrs!{At::Class => "hand"}, cards],
+            ]
+        };
+
+        let msg = match self.phase {
+            GamePhase::OthersTurn => p!["Waiting for other player's turn"],
+            GamePhase::MyTurn(TurnProgress::Nothing) => p!["Your turn! Select the card you want to play"],
+            GamePhase::MyTurn(TurnProgress::CardSelected(c)) => {
+                    let card = self.view.get_hand_card(&c);
+
+                    let span : Node<Msg> = if card.suite.is_red() {
+                        span![ style!{"color" => "red"}, format!("{}", card) ]
+                    } else {
+                        span![ style!{"color" => "black"}, format!("{}", card) ]
+                    };
+
+                    let mut div = div![];
+                    {
+                        let msg = InGameMsg::PutDown(c);
+                        div.add_child(
+                            button![ simple_ev(Ev::Click, Msg::InGame(msg)), "Play ", span.clone()]
+                        );
+                    }
+
+                    {
+                        let msg = InGameMsg::TakeWith(c);
+                        div.add_child(
+                            button![ simple_ev(Ev::Click, Msg::InGame(msg)), "Take with ", span.clone()]
+                        );
+                    }
+
+                    if !card.rank.is_figure() {
+                        let msg = InGameMsg::DeclareWith(c);
+                        div.add_child(
+                            button![ simple_ev(Ev::Click, Msg::InGame(msg)), "Declare with ", span]
+                        );
+                    };
+
+                    div
+            }
+            _ => panic!(""),
+        };
+
+        div![ table, hand, msg]
     }
 }
 
