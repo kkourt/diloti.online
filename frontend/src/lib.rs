@@ -12,26 +12,104 @@ type XRng = rand_pcg::Pcg64;
 
 /// Initial state
 
-#[derive(Clone)]
+#[derive(Clone,Debug)]
 enum InitMsg {
     StartGame,
+    StartGameReply(ResponseDataResult<String>),
+    SetPlayerCount(String),
 }
 
-struct InitSt {}
+struct InitSt {
+    nplayers: u8,
+    start_game_reply: Option<Result<String, String>>,
+}
+
+fn get_create_game_req_url() -> impl Into<std::borrow::Cow<'static, str>> {
+    "/creategame"
+}
+
 impl InitSt {
 
-    fn update_state(&mut self, msg: &InitMsg) -> Option<Model> {
-        Some(Model::InGame(
-            GameSt::default()
-        ))
+    fn update_state(&mut self, msg: &InitMsg, orders: &mut impl Orders<Msg>) -> Option<Model> {
+        // log!(format!("*************** {:?}", msg));
+
+        match msg {
+            InitMsg::StartGameReply(result) => {
+                self.start_game_reply = Some(
+                    result.as_ref()
+                          .map(|x| String::from(x))
+                          .map_err(|x| format!("Could not create new game: {:?}", x))
+                );
+            },
+
+            InitMsg::StartGame => {
+                let url = get_create_game_req_url();
+                let req = Request::new(url.into())
+                    .method(seed::browser::service::fetch::Method::Put)
+                    .fetch_string_data(
+                        |s| Msg::Init(InitMsg::StartGameReply(s))
+                    );
+                orders.perform_cmd(req);
+            },
+
+            InitMsg::SetPlayerCount(x) => {
+                if x == "1" {
+                    self.nplayers = 1;
+                } else if x == "2" {
+                    self.nplayers = 2;
+                } else if x == "4" {
+                    self.nplayers = 4;
+                } else {}
+            }
+        };
+
+        None
     }
 
     fn view(&self) -> Node<Msg> {
         let initmsg = InitMsg::StartGame;
-        button![
-            simple_ev(Ev::Click, Msg::Init(initmsg)),
-            format!("Start")
-        ]
+
+        let msg = if self.nplayers != 1 {
+            span![style!{"color" => "red"}, " (Sorry, just one player for now)"]
+        } else {
+           span![]
+        };
+
+        let mut ret = div![
+            h2!["Welcome!"],
+
+            span!["Number of players: "],
+            select![
+                attrs!{At::Value => "1"},
+                option!["4", attrs!{At::Value => "4"}],
+                option!["2", attrs!{At::Value => "2"}],
+                option!["1 (debug)", attrs!{At::Value => "1", At::Selected => true.as_at_value()}],
+                input_ev(Ev::Input, |x| Msg::Init(InitMsg::SetPlayerCount(x)))
+            ],
+            span![msg],
+
+            p![""],
+            button![
+                simple_ev(Ev::Click, Msg::Init(InitMsg::StartGame)),
+                "Start new game",
+                style![St::MarginRight => px(10)],
+            ],
+        ];
+
+        if let Some(x) = &self.start_game_reply {
+            match (x) {
+                Ok(x) => {
+                    ret.add_child(span![format!("{:?}", x)]);
+                },
+                Err(x) => {
+                    ret.add_child(span!["Failed! :-("]);
+                    ret.add_child(p![format!("Error;{:?}", x)]);
+                }
+            }
+        }
+
+        ret
+
     }
 }
 
@@ -79,12 +157,15 @@ impl Default for GameSt {
 
 impl Default for Model {
     fn default() -> Self {
-        // Self::Init(InitSt {})
-        Self::InGame(GameSt::default())
+        Self::Init(InitSt {
+            nplayers: 1,
+            start_game_reply: None,
+        })
+        // Self::InGame(GameSt::default())
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone,Debug)]
 enum InGameMsg {
     ClickHandCard(HandCardIdx),
     PutDown(HandCardIdx),
@@ -223,15 +304,15 @@ enum Model {
 }
 
 
-#[derive(Clone)]
+#[derive(Clone,Debug)]
 enum Msg {
     Init(InitMsg),
     InGame(InGameMsg),
 }
 
-fn update(msg: Msg, mut model: &mut Model, _: &mut impl Orders<Msg>) {
+fn update(msg: Msg, mut model: &mut Model, orders: &mut impl Orders<Msg>) {
     let upd_ret = match (&mut model, msg) {
-        (&mut Model::Init(st), Msg::Init(ref msg)) => st.update_state(msg),
+        (&mut Model::Init(st), Msg::Init(ref msg)) => st.update_state(msg, orders),
         (&mut Model::InGame(st), Msg::InGame(ref msg)) => st.update_state(msg),
         _ => panic!("Invalid message for current state"),
     };
