@@ -18,7 +18,7 @@ use tokio::sync::{mpsc, oneshot};
 use warp;
 use warp::Filter;
 
-use common::{CreateGameRep, /* CreateGameReq */};
+use common::{CreateReq, CreateRep, PlayerInfo, };
 
 // Here's the idea.
 // We want to build a server for playing a game
@@ -84,18 +84,7 @@ macro_rules! impl_char_id {
 
 impl_char_id!(GameId, 16);
 
-#[derive(Debug, Copy, Clone)]
-struct PlayerInfo {
-    /// player id (0 is admin of the game)
-    pub id: usize,
-    /// table position
-    pub tpos: u8,
-}
 
-impl PlayerInfo {
-    // NB: if we implement player remove, this would have to change
-    fn is_admin(&self) -> bool { self.id == 0 }
-}
 
 
 /**
@@ -104,7 +93,7 @@ impl PlayerInfo {
 
 #[derive(Debug)]
 pub struct GameConfig {
-    nplayers: usize,
+    nplayers: u8,
 }
 
 struct GamePlayer {
@@ -155,7 +144,7 @@ struct Directory {
 #[derive(Debug)]
 enum DirReq {
     /// Create a new game, return the ID
-    CreateGame(GameConfig, oneshot::Sender<CreateGameRep>),
+    CreateGame(GameConfig, oneshot::Sender<CreateRep>),
     /// Request the game task for a given game
     GetGameHandle(GameId, oneshot::Sender<Option<GameTaskTx>>),
 }
@@ -187,8 +176,8 @@ impl Game {
         let len = self.players.len();
 
         // no more players allowed
-        if len >= self.cfg.nplayers {
-            assert_eq!(len, self.cfg.nplayers);
+        if len >= self.cfg.nplayers as usize {
+            assert_eq!(len, self.cfg.nplayers as usize);
             return Err(String::from(format!("Game is already full ({} players)", len)));
         }
 
@@ -201,7 +190,7 @@ impl Game {
         Ok(self.players[len].player.clone())
     }
 
-    async fn task(mut self, rep_tx: oneshot::Sender<CreateGameRep>) {
+    async fn task(mut self, rep_tx: oneshot::Sender<CreateRep>) {
         self.task_init(rep_tx).await;
 
         while let Some(cmd) = self.self_rx.recv().await {
@@ -222,13 +211,13 @@ impl Game {
         unimplemented!()
     }
 
-    async fn task_init(&mut self, rep_tx: oneshot::Sender<CreateGameRep>) {
+    async fn task_init(&mut self, rep_tx: oneshot::Sender<CreateRep>) {
         // initialization: create the first player and send ther reply
         let game_id  = self.gid.to_string();
-        let reply = CreateGameRep { game_id: game_id };
+        let reply = CreateRep { game_id: game_id };
 
         if let Err(x) = rep_tx.send(reply) {
-            eprintln!("Error sending CreateGameRep reply: {:?}", x);
+            eprintln!("Error sending CreateRep reply: {:?}", x);
             // TODO: self destruct or soemthing?
             unimplemented!()
         }
@@ -248,7 +237,7 @@ impl Directory {
     // create a new game:
     //  - add an entry to the directory
     //  - spawn a task for the game with a mpsc channel, and keep the tx end in the table
-    pub fn new_game(&mut self, cfg: GameConfig, rep_tx: oneshot::Sender<CreateGameRep>) {
+    pub fn new_game(&mut self, cfg: GameConfig, rep_tx: oneshot::Sender<CreateRep>) {
         loop {
             let gid = GameId::new_random();
             match self.ht.entry(gid) {
@@ -308,12 +297,12 @@ fn rep_with_conflict<T: warp::Reply>(reply: T) -> warp::reply::WithStatus<T> {
     return warp::reply::with_status(reply, code);
 }
 
-async fn create_game(mut dir_tx: mpsc::Sender<DirReq>)
+async fn create_game(req: CreateReq, mut dir_tx: mpsc::Sender<DirReq>)
 -> Result<impl warp::Reply, std::convert::Infallible> {
-    let cnf = GameConfig { nplayers: 2 };
+    let cnf = GameConfig { nplayers: req.nplayers };
 
     // contact directory task to create a new game
-    let (tx, rx) = oneshot::channel::<CreateGameRep>();
+    let (tx, rx) = oneshot::channel::<CreateRep>();
     if let Err(x) = dir_tx.send(DirReq::CreateGame(cnf, tx)).await {
         error!("Error sending CreateGame request: {:?}", x);
         return Ok(rep_with_internal_error(String::from("")))
@@ -417,17 +406,7 @@ async fn main() {
     let (dir_tx, dir_rx) = tokio::sync::mpsc::channel::<DirReq>(1024);
     let dir = Directory::new(dir_rx, dir_tx.clone());
     let dir_task = tokio::spawn(dir.task());
-
-    // route: /hello
-    let hello_r = warp::path("hello").map(|| "Hello! I love pizza!".to_string());
-    // route: /creategame
-    let create_r = {
-        let dir_tx_ = dir_tx.clone();
-        warp::path("creategame")
-            .and(warp::put())
-            .and_then(move || { create_game(dir_tx_.clone()) })
-    };
-
+    //
     // route: /
     let index_r = warp::get()
         .and(warp::path::end())
@@ -436,9 +415,23 @@ async fn main() {
     // route: /pkg
     let pkg_r = warp::path("pkg").and(warp::fs::dir("frontend/pkg/"));
 
+
+    // route: /hello
+    let hello_r = warp::path("hello").map(|| "Hello! I love pizza!".to_string());
+
+    // route: /creategame
+    let create_r = {
+        let dir_tx_ = dir_tx.clone();
+        warp::path("creategame")
+            .and(warp::put())
+            .and(warp::body::content_length_limit(1024 * 16))
+            .and(warp::body::json())
+            .and_then(move |req| { create_game(req, dir_tx_.clone()) })
+    };
+
     // GET /ws -> websocket for playing the game
     let connect_r = warp::path("ws")
-        .and(warp::header("game_id"))
+        .and(warp::path::param())
         .and(warp::ws()) // prepare the websocket handshake
         .and_then(move |game_id, ws| start_player(game_id, ws, dir_tx.clone()) );
 

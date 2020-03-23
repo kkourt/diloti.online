@@ -1,3 +1,6 @@
+// XXX: until code stabilizes...
+#![allow(dead_code)]
+#![allow(unused_variables)]
 
 extern crate rand;
 extern crate rand_pcg;
@@ -8,10 +11,9 @@ use rand::SeedableRng;
 use seed::{*, prelude::*};
 use wasm_bindgen::JsCast;
 
-use core::{deck::Deck,
-           card::Card,
-           game::{Game, PlayerGameView, TableEntry, GameVer, HandCardIdx, TableEntryIdx, PlayerAction}};
-use common::CreateGameRep;
+use core;
+
+use common::{CreateReq, CreateRep, /* PreReq */};
 
 type XRng = rand_pcg::Pcg64;
 
@@ -20,13 +22,14 @@ type XRng = rand_pcg::Pcg64;
 #[derive(Clone,Debug)]
 enum InitMsg {
     StartGame,
-    StartGameReply(ResponseDataResult<CreateGameRep>),
+    StartGameReply(ResponseDataResult<CreateRep>),
     SetPlayerCount(String),
 }
 
 struct InitSt {
     /// Number of players
     nplayers: u8,
+    last_valid_nplayers: u8,
     /// Error when trying to start a game
     start_game_err: Option<String>,
 }
@@ -59,8 +62,10 @@ impl InitSt {
 
             InitMsg::StartGame => {
                 let url = get_create_game_req_url();
+                let req_body = CreateReq { nplayers: self.nplayers };
                 let req = Request::new(url.into())
                     .method(seed::browser::service::fetch::Method::Put)
+                    .send_json(&req_body)
                     .fetch_json_data( |o| Msg::Init(InitMsg::StartGameReply(o)));
                 orders.perform_cmd(req);
             },
@@ -68,8 +73,10 @@ impl InitSt {
             InitMsg::SetPlayerCount(x) => {
                 if x == "1" {
                     self.nplayers = 1;
+                    self.last_valid_nplayers = self.nplayers;
                 } else if x == "2" {
                     self.nplayers = 2;
+                    self.last_valid_nplayers = self.nplayers;
                 } else if x == "4" {
                     self.nplayers = 4;
                 } else {}
@@ -80,10 +87,13 @@ impl InitSt {
     }
 
     fn view(&self) -> Node<Msg> {
-        let msg = if self.nplayers != 1 {
-            span![style!{"color" => "red"}, " (Sorry, just one player for now)"]
-        } else {
-           span![]
+
+        let (msg, attr) = match self.nplayers {
+            1 => (span![], attrs!{At::Value => "1"}),
+            2 => (span![], attrs!{At::Value => "2"}),
+            4 => (span![style!{"color" => "red"}, " (Sorry, four players not yet supported)"],
+                  attrs!{At::Value => format!("{}", self.last_valid_nplayers)}),
+            x => panic!("Invalid player count: {}", x),
         };
 
         let mut ret = div![
@@ -91,10 +101,10 @@ impl InitSt {
 
             span!["Number of players: "],
             select![
-                attrs!{At::Value => "1"},
-                option!["4", attrs!{At::Value => "4"}],
+                attr,
+                option!["1 (debug)", attrs!{At::Value => "1"}],
                 option!["2", attrs!{At::Value => "2"}],
-                option!["1 (debug)", attrs!{At::Value => "1", At::Selected => true.as_at_value()}],
+                option!["4", attrs!{At::Value => "4"}],
                 input_ev(Ev::Input, |x| Msg::Init(InitMsg::SetPlayerCount(x)))
             ],
             span![msg],
@@ -130,6 +140,7 @@ struct LobbySt {
     game_id: String,
     /// websocket to server
     ws: web_sys::WebSocket,
+    ws_state: WsState,
 }
 
 
@@ -156,47 +167,60 @@ fn register_ws_handler<T, F>(
 
 impl LobbySt {
     fn view(&self) -> Node<Msg> {
-        h2!["Welcome to the Lobby"]
+        h2!["Lobby"]
     }
 
     fn update_state(&mut self, msg: &LobbyMsg, _orders: &mut impl Orders<Msg>) -> Option<Model> {
         unimplemented!();
+    }
+
+    fn handle_ws_event(&mut self, ev: &WsEvent, _orders: &mut impl Orders<Msg>) -> Option<Model> {
+        match (ev, self.ws_state) {
+            (WsEvent::WsConnected(jv), WsState::Init) => {
+                // change ws state to ready
+                log(format!("Connected: {}", jv.as_string().unwrap_or("<None>".to_string())));
+                self.ws_state = WsState::Ready;
+            }
+            _ => panic!("Invalid websocket state/message ({:?}/{:?})", ev, self.ws_state)
+        };
+
         None
     }
+
 
     fn new(nplayers: u8, game_id: String, orders: &mut impl Orders<Msg>) -> Result<LobbySt,String> {
         let hname = web_sys::window().unwrap().location().host().unwrap();
         let ws_url = format!("ws://{}/ws/{}", hname, game_id);
-        log(format!("**************** ws_url={}", ws_url));
+        // log(format!("**************** ws_url={}", ws_url));
+
         let ws = web_sys::WebSocket::new(&ws_url).unwrap();
+
+        register_ws_handler(
+            web_sys::WebSocket::set_onopen,
+            |jv| Msg::Ws(WsEvent::WsConnected(jv)),
+            &ws, orders);
+
+        register_ws_handler(
+            web_sys::WebSocket::set_onclose,
+            |jv| Msg::Ws(WsEvent::WsClose(jv)),
+            &ws, orders);
+
+        register_ws_handler(
+            web_sys::WebSocket::set_onerror,
+            |jv| Msg::Ws(WsEvent::WsError(jv)),
+            &ws, orders);
+
+        register_ws_handler(
+            web_sys::WebSocket::set_onmessage,
+            |me| Msg::Ws(WsEvent::WsMessage(me)),
+            &ws, orders);
 
         let ret = LobbySt {
             nplayers: nplayers,
             game_id: game_id,
             ws: ws,
+            ws_state: WsState::Init,
         };
-
-        register_ws_handler(
-            web_sys::WebSocket::set_onopen,
-            |jv| Msg::Ws(WsEvent::WsConnected(jv)),
-            &ret.ws, orders);
-
-        register_ws_handler(
-            web_sys::WebSocket::set_onclose,
-            |jv| Msg::Ws(WsEvent::WsClose(jv)),
-            &ret.ws,
-            orders);
-
-        register_ws_handler(
-            web_sys::WebSocket::set_onerror,
-            |jv| Msg::Ws(WsEvent::WsError(jv)),
-            &ret.ws, orders);
-
-        register_ws_handler(
-            web_sys::WebSocket::set_onmessage,
-            |me| Msg::Ws(WsEvent::WsMessage(me)),
-            &ret.ws, orders);
-
         Ok(ret)
     }
 }
@@ -206,15 +230,15 @@ impl LobbySt {
 struct TableSelection {
     curent: Vec<usize>,
     existing: Vec<Vec<usize>>,
-    ver: GameVer,
+    ver: core::GameVer,
 }
 
 enum TurnProgress {
     Nothing,
-    CardSelected(HandCardIdx),
-    DeclaringWith(HandCardIdx, TableSelection),
-    GatheringWith(HandCardIdx, TableSelection),
-    ActionIssued(PlayerAction),
+    CardSelected(core::HandCardIdx),
+    DeclaringWith(core::HandCardIdx, TableSelection),
+    GatheringWith(core::HandCardIdx, TableSelection),
+    ActionIssued(core::PlayerAction),
 }
 
 enum GamePhase {
@@ -223,16 +247,16 @@ enum GamePhase {
 }
 
 struct GameSt {
-    pub game: Game<XRng>,
+    pub game: core::Game<XRng>,
     pub phase: GamePhase,
-    pub view: PlayerGameView,
+    pub view: core::PlayerGameView,
 }
 
 
 impl Default for GameSt {
     fn default() -> Self {
         let rng = XRng::from_rng(rand::rngs::OsRng).expect("unable to initalize RNG");
-        let game = Game::new_2p(rng);
+        let game = core::Game::new_2p(rng);
         let view = game.get_player_game_view();
         Self {
             game: game,
@@ -246,6 +270,7 @@ impl Default for Model {
     fn default() -> Self {
         Self::Init(InitSt {
             nplayers: 1,
+            last_valid_nplayers: 1,
             start_game_err: None,
         })
         // Self::InGame(GameSt::default())
@@ -254,10 +279,10 @@ impl Default for Model {
 
 #[derive(Clone,Debug)]
 enum InGameMsg {
-    ClickHandCard(HandCardIdx),
-    PutDown(HandCardIdx),
-    TakeWith(HandCardIdx),
-    DeclareWith(HandCardIdx),
+    ClickHandCard(core::HandCardIdx),
+    PutDown(core::HandCardIdx),
+    TakeWith(core::HandCardIdx),
+    DeclareWith(core::HandCardIdx),
 }
 
 
@@ -269,7 +294,7 @@ impl GameSt {
             }
 
             InGameMsg::PutDown(x) => {
-                let action = PlayerAction::Play(*x);
+                let action = core::PlayerAction::Play(*x);
                 self.issue_action(&action);
                 self.phase = GamePhase::MyTurn(TurnProgress::ActionIssued(action));
             }
@@ -280,13 +305,13 @@ impl GameSt {
         None
     }
 
-    fn issue_action(&self, act: &PlayerAction) {
+    fn issue_action(&self, act: &core::PlayerAction) {
         // TODO
         log(format!("Issuing action: {:?}", act));
     }
 
-    fn mk_card_div(&self, card: &Card) -> Node<Msg> {
-        let attr = if card.suite.is_red() {
+    fn mk_card_div(&self, card: &core::Card) -> Node<Msg> {
+        let attr = if card.suit.is_red() {
             let mut a = Attrs::empty();
             a.add_multiple(At::Class, &["card", "red"]);
             a
@@ -299,10 +324,10 @@ impl GameSt {
         div![ attr, format!("{}", card)]
     }
 
-    fn mk_table_entry_div(&self, te: &TableEntry) -> Node<Msg> {
+    fn mk_table_entry_div(&self, te: &core::TableEntry) -> Node<Msg> {
         match te {
-            TableEntry::Decl(x) => unimplemented!(),
-            TableEntry::Card(x) => self.mk_card_div(x),
+            core::TableEntry::Decl(x) => unimplemented!(),
+            core::TableEntry::Card(x) => self.mk_card_div(x),
         }
     }
 
@@ -346,7 +371,7 @@ impl GameSt {
             GamePhase::MyTurn(TurnProgress::CardSelected(c)) => {
                     let card = self.view.get_hand_card(&c);
 
-                    let span : Node<Msg> = if card.suite.is_red() {
+                    let span : Node<Msg> = if card.suit.is_red() {
                         span![ style!{"color" => "red"}, format!("{}", card) ]
                     } else {
                         span![ style!{"color" => "black"}, format!("{}", card) ]
@@ -396,6 +421,14 @@ enum WsEvent {
     WsMessage(web_sys::MessageEvent),
 }
 
+#[derive(Debug, Clone, Copy)]
+enum WsState {
+    Init,
+    Ready,
+    Closed,
+    Error,
+}
+
 enum Model {
     Init(InitSt),
     InLobby(LobbySt),
@@ -411,9 +444,11 @@ enum Msg {
 }
 
 fn update(msg: Msg, mut model: &mut Model, orders: &mut impl Orders<Msg>) {
+    log(format!("update => {:?}", msg));
     let upd_ret = match (&mut model, msg) {
-        (&mut Model::Init(st), Msg::Init(ref msg)) => st.update_state(msg, orders),
+        (&mut Model::Init(st), Msg::Init(ref msg))     => st.update_state(msg, orders),
         (&mut Model::InLobby(st), Msg::Lobby(ref msg)) => st.update_state(msg, orders),
+        (&mut Model::InLobby(st), Msg::Ws(ref msg))    => st.handle_ws_event(msg, orders),
         (&mut Model::InGame(st), Msg::InGame(ref msg)) => st.update_state(msg),
         _ => panic!("Invalid message for current state"),
     };

@@ -11,6 +11,6 @@ pub enum Error {
     InvalidRankNumber(String),
     /// Char -> Rank conversion failed (argument is given character)
     InvalidRankChar(char),
-    /// Char -> Suite conversion failed (argument is given character)
-    InvalidSuiteChar(char),
+    /// Char -> Suit conversion failed (argument is given character)
+    InvalidSuitChar(char),
 }

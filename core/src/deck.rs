@@ -8,7 +8,7 @@
 use rand::prelude::SliceRandom;
 use std::convert::TryFrom;
 
-use super::card::{Rank,Suite,Card};
+use super::card::{Rank,Suit,Card};
 
 /// A Deck is an ordered collection of cards
 #[derive(Clone)]
@@ -23,10 +23,10 @@ impl Deck {
 
     pub fn full_52() -> Deck {
         let mut cards = vec![];
-        for suite in [Suite::Spade, Suite::Club, Suite::Heart, Suite::Diamond].iter() {
+        for suit in [Suit::Spade, Suit::Club, Suit::Heart, Suit::Diamond].iter() {
             for rank in 1..=13 {
                 cards.push(Card {
-                    suite: *suite,
+                    suit: *suit,
                     rank: Rank::try_from(rank).unwrap()
                 });
             }

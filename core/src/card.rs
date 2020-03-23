@@ -8,7 +8,7 @@ use std::convert::TryFrom;
 use super::error as e;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Suite {
+pub enum Suit {
     /// ♠
     Spade,
     /// ♣
@@ -25,13 +25,13 @@ pub struct Rank(u8);
 /// Game card
 #[derive(PartialEq, Eq, Clone)]
 pub struct Card {
-    pub suite: Suite,
+    pub suit: Suit,
     pub rank: Rank,
 }
 
 #[derive(PartialEq,Eq, Copy, Clone)]
 pub struct CardClone {
-    pub suite: Suite,
+    pub suit: Suit,
     pub rank: Rank,
 }
 
@@ -71,7 +71,7 @@ impl Rank {
     }
 }
 
-impl Suite {
+impl Suit {
     pub fn is_red(&self) -> bool {
         match self {
             Self::Spade => false,
@@ -94,7 +94,7 @@ impl Suite {
 impl Card {
     pub fn get_clone(&self) -> CardClone {
         CardClone {
-            suite: self.suite,
+            suit: self.suit,
             rank: self.rank,
         }
     }
@@ -121,16 +121,16 @@ impl TryFrom<char> for Rank {
     }
 }
 
-impl TryFrom<char> for Suite {
+impl TryFrom<char> for Suit {
     type Error = e::Error;
 
-    fn try_from(val: char) -> Result<Suite, e::Error> {
+    fn try_from(val: char) -> Result<Suit, e::Error> {
         match val {
-            's' | 'S' | '♠' => Ok(Suite::Spade),
-            'c' | 'C' | '♣' => Ok(Suite::Club),
-            'd' | 'D' | '♦' => Ok(Suite::Diamond),
-            'h' | 'H' | '♥' => Ok(Suite::Heart),
-            _ => Err(e::Error::InvalidSuiteChar(val)),
+            's' | 'S' | '♠' => Ok(Suit::Spade),
+            'c' | 'C' | '♣' => Ok(Suit::Club),
+            'd' | 'D' | '♦' => Ok(Suit::Diamond),
+            'h' | 'H' | '♥' => Ok(Suit::Heart),
+            _ => Err(e::Error::InvalidSuitChar(val)),
         }
     }
 }
@@ -138,35 +138,35 @@ impl TryFrom<char> for Suite {
 impl TryFrom<[char; 2]> for Card {
     type Error = e::Error;
 
-    /// suite first
+    /// suit first
     fn try_from(val: [char; 2]) -> Result<Card, e::Error> {
-        let suite = Suite::try_from(val[0])?;
+        let suit = Suit::try_from(val[0])?;
         let rank = Rank::try_from(val[1])?;
-        Ok(Card{suite: suite, rank: rank})
+        Ok(Card{suit: suit, rank: rank})
     }
 }
 
 impl std::fmt::Display for Card {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        f.write_fmt(format_args!("{}{}", self.suite.to_symbol(), self.rank.to_symbol()))
+        f.write_fmt(format_args!("{}{}", self.suit.to_symbol(), self.rank.to_symbol()))
     }
 }
 
 impl std::fmt::Debug for Card {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        f.write_fmt(format_args!("{}{}", self.suite.to_symbol(), self.rank.to_symbol()))
+        f.write_fmt(format_args!("{}{}", self.suit.to_symbol(), self.rank.to_symbol()))
     }
 }
 
 impl std::fmt::Display for CardClone {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        f.write_fmt(format_args!("{}{}", self.suite.to_symbol(), self.rank.to_symbol()))
+        f.write_fmt(format_args!("{}{}", self.suit.to_symbol(), self.rank.to_symbol()))
     }
 }
 
 impl std::fmt::Debug for CardClone {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        f.write_fmt(format_args!("{}{}", self.suite.to_symbol(), self.rank.to_symbol()))
+        f.write_fmt(format_args!("{}{}", self.suit.to_symbol(), self.rank.to_symbol()))
     }
 }
 
@@ -176,9 +176,9 @@ fn try_from_tests() {
     assert_eq!(Rank::try_from('1').unwrap(), Rank(1));
     assert_eq!(Rank::try_from('A').unwrap(), Rank(1));
     assert!(Rank::try_from('x').is_err());
-    // suite
-    assert_eq!(Suite::try_from('♥').unwrap(), Suite::Heart);
-    assert!(Suite::try_from('x').is_err());
+    // suit
+    assert_eq!(Suit::try_from('♥').unwrap(), Suit::Heart);
+    assert!(Suit::try_from('x').is_err());
     // card
-    assert_eq!(Card::try_from(['♥','T']).unwrap(), Card{suite: Suite::Heart, rank: Rank(10)});
+    assert_eq!(Card::try_from(['♥','T']).unwrap(), Card{suit: Suit::Heart, rank: Rank(10)});
 }
