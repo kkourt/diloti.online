@@ -12,13 +12,13 @@ use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 // use log::Level;
 
 // use futures::future;
-use futures::StreamExt;
+use futures::{StreamExt};
 use tokio;
 use tokio::sync::{mpsc, oneshot};
 use warp;
 use warp::Filter;
 
-use backend::common::{CreateGameRep, /* CreateGameReq */};
+use common::{CreateGameRep, /* CreateGameReq */};
 
 // Here's the idea.
 // We want to build a server for playing a game
@@ -88,8 +88,8 @@ impl_char_id!(GameId, 16);
 struct PlayerInfo {
     /// player id (0 is admin of the game)
     pub id: usize,
-    /// table location
-    pub tloc: u8,
+    /// table position
+    pub tpos: u8,
 }
 
 impl PlayerInfo {
@@ -193,7 +193,7 @@ impl Game {
         }
 
         let p = GamePlayer {
-            player: PlayerInfo { tloc: len as u8, id: len, },
+            player: PlayerInfo { tpos: len as u8, id: len, },
             tx: ptx.clone(),
         };
         self.players.push(p);
@@ -388,11 +388,17 @@ async fn start_player(
     // and we return rep which is a reply that will execute the upgrade and spawn a task with our
     // closure.
     let rep = ws.on_upgrade(|websocket| async move {
-        let (ws_tx, ws_rx) = websocket.split();
+        let (ws_tx, mut ws_rx) = websocket.split();
         // We either:
-        // receive requests from the game thread and send them to the client
-        // receive requests from the client and send them to the game thread
-        unimplemented!()
+        // receive requests from the game tasj and send them to the client
+        // receive requests from the client and send them to the game task
+        loop {
+            tokio::select! {
+                cli_req = ws_rx.next() => unimplemented!(),
+                game_req = player_rx.next() => unimplemented!(),
+                else => break,
+            };
+        }
     });
 
     Ok(Box::new(rep))

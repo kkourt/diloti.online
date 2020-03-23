@@ -1,12 +1,17 @@
 
 extern crate rand;
 extern crate rand_pcg;
+extern crate web_sys;
+extern crate wasm_bindgen;
 
-use seed::{*, prelude::*};
 use rand::SeedableRng;
+use seed::{*, prelude::*};
+use wasm_bindgen::JsCast;
+
 use core::{deck::Deck,
            card::Card,
            game::{Game, PlayerGameView, TableEntry, GameVer, HandCardIdx, TableEntryIdx, PlayerAction}};
+use common::CreateGameRep;
 
 type XRng = rand_pcg::Pcg64;
 
@@ -15,13 +20,15 @@ type XRng = rand_pcg::Pcg64;
 #[derive(Clone,Debug)]
 enum InitMsg {
     StartGame,
-    StartGameReply(ResponseDataResult<String>),
+    StartGameReply(ResponseDataResult<CreateGameRep>),
     SetPlayerCount(String),
 }
 
 struct InitSt {
+    /// Number of players
     nplayers: u8,
-    start_game_reply: Option<Result<String, String>>,
+    /// Error when trying to start a game
+    start_game_err: Option<String>,
 }
 
 fn get_create_game_req_url() -> impl Into<std::borrow::Cow<'static, str>> {
@@ -35,20 +42,26 @@ impl InitSt {
 
         match msg {
             InitMsg::StartGameReply(result) => {
-                self.start_game_reply = Some(
-                    result.as_ref()
-                          .map(|x| String::from(x))
-                          .map_err(|x| format!("Could not create new game: {:?}", x))
-                );
+                match result {
+                    // change state to lobby
+                    Ok(rep) => {
+                        return Some(Model::InLobby(
+                            // TODO: proper error checking
+                            LobbySt::new(self.nplayers, rep.game_id.clone(), orders).unwrap()
+                        ));
+                    }
+
+                    Err(x) => {
+                        self.start_game_err = Some(format!("Could not create new game: {:?}", x));
+                    }
+                }
             },
 
             InitMsg::StartGame => {
                 let url = get_create_game_req_url();
                 let req = Request::new(url.into())
                     .method(seed::browser::service::fetch::Method::Put)
-                    .fetch_string_data(
-                        |s| Msg::Init(InitMsg::StartGameReply(s))
-                    );
+                    .fetch_json_data( |o| Msg::Init(InitMsg::StartGameReply(o)));
                 orders.perform_cmd(req);
             },
 
@@ -67,8 +80,6 @@ impl InitSt {
     }
 
     fn view(&self) -> Node<Msg> {
-        let initmsg = InitMsg::StartGame;
-
         let msg = if self.nplayers != 1 {
             span![style!{"color" => "red"}, " (Sorry, just one player for now)"]
         } else {
@@ -96,25 +107,101 @@ impl InitSt {
             ],
         ];
 
-        if let Some(x) = &self.start_game_reply {
-            match (x) {
-                Ok(x) => {
-                    ret.add_child(span![format!("{:?}", x)]);
-                },
-                Err(x) => {
-                    ret.add_child(span!["Failed! :-("]);
-                    ret.add_child(p![format!("Error;{:?}", x)]);
-                }
-            }
+        if let Some(x) = &self.start_game_err {
+            ret.add_child(span!["Failed! :-("]);
+            ret.add_child(p![format!("Error:{:?}", x)]);
         }
 
         ret
-
     }
 }
 
+/// Loby state
 
-/// Game states
+#[derive(Debug,Clone)]
+enum LobbyMsg {
+}
+
+#[derive(Debug)]
+struct LobbySt {
+    /// Number of players
+    nplayers: u8,
+    /// game identifier
+    game_id: String,
+    /// websocket to server
+    ws: web_sys::WebSocket,
+}
+
+
+// stolen from seed's examples
+fn register_ws_handler<T, F>(
+    ws_cb_setter: fn(&web_sys::WebSocket, Option<&js_sys::Function>),
+    msg: F,
+    ws: &web_sys::WebSocket,
+    orders: &mut impl Orders<Msg>,
+) where
+    T: wasm_bindgen::convert::FromWasmAbi + 'static,
+    F: Fn(T) -> Msg + 'static,
+{
+    let (app, msg_mapper) = (orders.clone_app(), orders.msg_mapper());
+
+    let closure = Closure::new(move |data| {
+        app.update(msg_mapper(msg(data)));
+    });
+
+    ws_cb_setter(ws, Some(closure.as_ref().unchecked_ref()));
+    closure.forget();
+}
+
+
+impl LobbySt {
+    fn view(&self) -> Node<Msg> {
+        h2!["Welcome to the Lobby"]
+    }
+
+    fn update_state(&mut self, msg: &LobbyMsg, _orders: &mut impl Orders<Msg>) -> Option<Model> {
+        unimplemented!();
+        None
+    }
+
+    fn new(nplayers: u8, game_id: String, orders: &mut impl Orders<Msg>) -> Result<LobbySt,String> {
+        let hname = web_sys::window().unwrap().location().host().unwrap();
+        let ws_url = format!("ws://{}/ws/{}", hname, game_id);
+        log(format!("**************** ws_url={}", ws_url));
+        let ws = web_sys::WebSocket::new(&ws_url).unwrap();
+
+        let ret = LobbySt {
+            nplayers: nplayers,
+            game_id: game_id,
+            ws: ws,
+        };
+
+        register_ws_handler(
+            web_sys::WebSocket::set_onopen,
+            |jv| Msg::Ws(WsEvent::WsConnected(jv)),
+            &ret.ws, orders);
+
+        register_ws_handler(
+            web_sys::WebSocket::set_onclose,
+            |jv| Msg::Ws(WsEvent::WsClose(jv)),
+            &ret.ws,
+            orders);
+
+        register_ws_handler(
+            web_sys::WebSocket::set_onerror,
+            |jv| Msg::Ws(WsEvent::WsError(jv)),
+            &ret.ws, orders);
+
+        register_ws_handler(
+            web_sys::WebSocket::set_onmessage,
+            |me| Msg::Ws(WsEvent::WsMessage(me)),
+            &ret.ws, orders);
+
+        Ok(ret)
+    }
+}
+
+/// Game state
 
 struct TableSelection {
     curent: Vec<usize>,
@@ -159,7 +246,7 @@ impl Default for Model {
     fn default() -> Self {
         Self::Init(InitSt {
             nplayers: 1,
-            start_game_reply: None,
+            start_game_err: None,
         })
         // Self::InGame(GameSt::default())
     }
@@ -297,22 +384,36 @@ impl GameSt {
 }
 
 /// Demultiplexers
+// NB: there seem to be some facilities for better handling this demultiplexing:
+// https://seed-rs.org/guide/complex-apps, but for now we just ad-hoc it.
+
+
+#[derive(Debug,Clone)]
+enum WsEvent {
+    WsConnected(wasm_bindgen::JsValue),
+    WsClose(wasm_bindgen::JsValue),
+    WsError(wasm_bindgen::JsValue),
+    WsMessage(web_sys::MessageEvent),
+}
 
 enum Model {
     Init(InitSt),
+    InLobby(LobbySt),
     InGame(GameSt),
 }
-
 
 #[derive(Clone,Debug)]
 enum Msg {
     Init(InitMsg),
     InGame(InGameMsg),
+    Lobby(LobbyMsg),
+    Ws(WsEvent),
 }
 
 fn update(msg: Msg, mut model: &mut Model, orders: &mut impl Orders<Msg>) {
     let upd_ret = match (&mut model, msg) {
         (&mut Model::Init(st), Msg::Init(ref msg)) => st.update_state(msg, orders),
+        (&mut Model::InLobby(st), Msg::Lobby(ref msg)) => st.update_state(msg, orders),
         (&mut Model::InGame(st), Msg::InGame(ref msg)) => st.update_state(msg),
         _ => panic!("Invalid message for current state"),
     };
@@ -326,14 +427,8 @@ fn view(model: &Model) -> impl View<Msg> {
     match model {
         Model::Init(st) => st.view(),
         Model::InGame(st) => st.view(),
+        Model::InLobby(st) => st.view(),
     }
-
-    /*
-    button![
-        simple_ev(Ev::Click, Msg::Increment),
-        format!("Hello, World × {}", model.val)
-    ]
-    */
 }
 
 #[wasm_bindgen(start)]
