@@ -15,5 +15,4 @@ pub struct CreateGameReq {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct CreateGameRep {
     pub game_id: String,
-    pub auth_id: String,
 }

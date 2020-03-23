@@ -9,15 +9,16 @@ use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
-use log::Level;
+// use log::Level;
 
-use futures::future;
+// use futures::future;
+use futures::StreamExt;
 use tokio;
 use tokio::sync::{mpsc, oneshot};
 use warp;
 use warp::Filter;
 
-use backend::common::{CreateGameRep, CreateGameReq};
+use backend::common::{CreateGameRep, /* CreateGameReq */};
 
 // Here's the idea.
 // We want to build a server for playing a game
@@ -81,15 +82,19 @@ macro_rules! impl_char_id {
     };
 }
 
-impl_char_id!(PlayerAuthId, 16);
 impl_char_id!(GameId, 16);
 
-struct Player {
+#[derive(Debug, Copy, Clone)]
+struct PlayerInfo {
+    /// player id (0 is admin of the game)
+    pub id: usize,
     /// table location
     pub tloc: u8,
+}
 
-    /// auth id
-    auth_id: PlayerAuthId,
+impl PlayerInfo {
+    // NB: if we implement player remove, this would have to change
+    fn is_admin(&self) -> bool { self.id == 0 }
 }
 
 
@@ -102,8 +107,13 @@ pub struct GameConfig {
     nplayers: usize,
 }
 
+struct GamePlayer {
+    player: PlayerInfo,
+    tx: PlayerTaskTx,
+}
+
 struct Game {
-    players: Vec<Player>, // player players[0] is admin
+    players: Vec<GamePlayer>, // player players[0] is admin
     self_rx: GameTaskRx,
     dir_tx: DirTaskTx,
     gid: GameId,
@@ -113,13 +123,22 @@ struct Game {
 /// Game task requests (includes oneshot channels for replies as needed)
 #[derive(Debug)]
 enum GameReq {
-    RegisterPlayer(oneshot::Sender<Option<>>),
+    RegisterPlayer(PlayerTaskTx),
 }
 
 /// A channel to send requests (GameReq) to the game task
 type GameTaskTx = tokio::sync::mpsc::Sender<GameReq>;
 /// A channel to receive game requests
 type GameTaskRx = tokio::sync::mpsc::Receiver<GameReq>;
+
+/// Information passed from the game to the player
+#[derive(Debug)]
+enum PlayerNotification {
+    RegistrationResult(Result<PlayerInfo, String>),
+}
+
+type PlayerTaskTx = tokio::sync::mpsc::Sender<PlayerNotification>;
+type PlayerTaskRx = tokio::sync::mpsc::Receiver<PlayerNotification>;
 
 /**
  * Directory structures
@@ -157,53 +176,56 @@ impl Game {
         }
     }
 
-    fn get_player_by_id(&self, auth_id: PlayerAuthId) -> Option<&Player> {
-        for p in self.players.iter() {
-            if p.auth_id == auth_id {
-                return Some(p);
-            }
-        }
-
-        None
+    fn get_player_by_id(&self, id: usize) -> Option<&GamePlayer> {
+        self.players.get(id)
     }
 
     /// add a new player, and return its reference
     /// Fails if we 've already reached the maximum number of players.
-    fn new_player(&mut self) -> Option<&Player> {
+    fn new_player(&mut self, ptx: &PlayerTaskTx) -> Result<PlayerInfo, String> {
+
         let len = self.players.len();
 
         // no more players allowed
         if len >= self.cfg.nplayers {
             assert_eq!(len, self.cfg.nplayers);
-            return None;
+            return Err(String::from(format!("Game is already full ({} players)", len)));
         }
 
-        let p_authid = loop {
-            let x = PlayerAuthId::new_random();
-            if self.get_player_by_id(x).is_none() {
-                break x;
-            }
-        };
-
-        let p = Player {
-            tloc: len as u8,
-            auth_id: p_authid,
+        let p = GamePlayer {
+            player: PlayerInfo { tloc: len as u8, id: len, },
+            tx: ptx.clone(),
         };
         self.players.push(p);
 
-        Some(&self.players[len])
+        Ok(self.players[len].player.clone())
+    }
+
+    async fn task(mut self, rep_tx: oneshot::Sender<CreateGameRep>) {
+        self.task_init(rep_tx).await;
+
+        while let Some(cmd) = self.self_rx.recv().await {
+            match cmd {
+                GameReq::RegisterPlayer(mut pl_tx) => {
+                    let ret = self.new_player(&pl_tx);
+                    let rep = PlayerNotification::RegistrationResult(ret);
+                    if let Err(x) = pl_tx.send(rep).await {
+                        eprintln!("Error sending RegisterPlayer reply: {:?}", x);
+                        // TODO: remove player if they were registered (?)
+                        unimplemented!()
+                    }
+                }
+            }
+        }
+
+        // TODO: remove self from directory
+        unimplemented!()
     }
 
     async fn task_init(&mut self, rep_tx: oneshot::Sender<CreateGameRep>) {
         // initialization: create the first player and send ther reply
         let game_id  = self.gid.to_string();
-        let player = self.new_player().unwrap();
-        let auth_id = player.auth_id.to_string();
-
-        let reply = CreateGameRep {
-            game_id: game_id,
-            auth_id: auth_id,
-        };
+        let reply = CreateGameRep { game_id: game_id };
 
         if let Err(x) = rep_tx.send(reply) {
             eprintln!("Error sending CreateGameRep reply: {:?}", x);
@@ -212,18 +234,6 @@ impl Game {
         }
     }
 
-    async fn task(mut self, rep_tx: oneshot::Sender<CreateGameRep>) {
-        self.task_init(rep_tx).await;
-
-        while let Some(cmd) = self.self_rx.recv().await {
-            match cmd {
-                _ => unimplemented!(),
-            }
-        }
-
-        // TODO: remove self from directory
-        unimplemented!()
-    }
 }
 
 impl Directory {
@@ -278,18 +288,23 @@ impl Directory {
     }
 }
 
-fn with_internal_error<T: warp::Reply>(reply: T) -> warp::reply::WithStatus<T> {
+fn rep_with_internal_error<T: warp::Reply>(reply: T) -> warp::reply::WithStatus<T> {
     let code = warp::http::StatusCode::INTERNAL_SERVER_ERROR;
     return warp::reply::with_status(reply, code);
 }
 
-fn with_unauthorized<T: warp::Reply>(reply: T) -> warp::reply::WithStatus<T> {
+fn rep_with_unauthorized<T: warp::Reply>(reply: T) -> warp::reply::WithStatus<T> {
     let code = warp::http::StatusCode::UNAUTHORIZED;
     return warp::reply::with_status(reply, code);
 }
 
-fn with_ok<T: warp::Reply>(reply: T) -> warp::reply::WithStatus<T> {
+fn rep_with_ok<T: warp::Reply>(reply: T) -> warp::reply::WithStatus<T> {
     let code = warp::http::StatusCode::OK;
+    return warp::reply::with_status(reply, code);
+}
+
+fn rep_with_conflict<T: warp::Reply>(reply: T) -> warp::reply::WithStatus<T> {
+    let code = warp::http::StatusCode::CONFLICT;
     return warp::reply::with_status(reply, code);
 }
 
@@ -301,54 +316,86 @@ async fn create_game(mut dir_tx: mpsc::Sender<DirReq>)
     let (tx, rx) = oneshot::channel::<CreateGameRep>();
     if let Err(x) = dir_tx.send(DirReq::CreateGame(cnf, tx)).await {
         error!("Error sending CreateGame request: {:?}", x);
-        return Ok(with_internal_error(String::from("")))
+        return Ok(rep_with_internal_error(String::from("")))
     }
 
     // recceive reply from directory task
     if let Ok(ret) = rx.await {
-        Ok(with_ok(serde_json::to_string(&ret).unwrap()))
+        Ok(rep_with_ok(serde_json::to_string(&ret).unwrap()))
     } else {
         error!("Error receiving result from directory");
-        Ok(with_internal_error(String::from("")))
+        Ok(rep_with_internal_error(String::from("")))
     }
 }
 
-async fn create_ws(
-    game_id_s: String, auth_id_s: String,
+async fn start_player(
+    game_id_s: String,
     ws: warp::ws::Ws,
-    mut dir_tx: mpsc::Sender<DirReq>)
--> Result<impl warp::Reply, std::convert::Infallible> {
+    mut dir_tx: mpsc::Sender<DirReq>,
+) -> Result<Box<dyn warp::Reply>, std::convert::Infallible> {
 
-    let invalid_reply = |s| {
-        let code = warp::http::StatusCode::UNAUTHORIZED;
-        warp::reply::with_status(s, code)
-    };
-
-    let auth_id = match PlayerAuthId::from_string(&auth_id_s) {
-        None => return Ok(invalid_reply("invalid auth id")),
-        Some(x) => x,
-    };
+    // shortcuts for some replies
+    // NB: we a trait object to have a common return type. Not sure if there is a better way.
+    let rep_unauthorized = |s| Ok(Box::new(rep_with_unauthorized(s)) as Box<dyn warp::Reply>);
+    let rep_error        = |s| Ok(Box::new(rep_with_internal_error(s)) as Box<dyn warp::Reply>);
+    let rep_conflict     = |s| Ok(Box::new(rep_with_conflict(s)) as Box<dyn warp::Reply>);
 
     let game_id = match GameId::from_string(&game_id_s) {
-        None => return Ok(invalid_reply("invalid game id")),
+        None => return rep_unauthorized("invalid game id"),
         Some(x) => x,
     };
 
-    // contact directory server to get the tx endpoint for the game
-    let (tx, rx) = oneshot::channel::<Option<GameTaskTx>>();
-    if let Err(x) = dir_tx.send(DirReq::GetGameHandle(game_id, tx)).await {
-        eprintln!("Error send CreateGame request: {:?}", x)
-    }
+    // contact directory server to get the tx endpoint for the game task
+    let mut game_tx: GameTaskTx = {
+        // create a oneshot channel for the reply
+        let (tx, rx) = oneshot::channel::<Option<GameTaskTx>>();
+        if let Err(x) = dir_tx.send(DirReq::GetGameHandle(game_id, tx)).await {
+            eprintln!("Error sedding CreateGame request: {:?}", x);
+            return rep_error("Failed to register player to game");
+        }
 
-    let game_tx: GameTaskTx = if let Ok(Some(x)) = rx.await {
-        x
-    } else {
-        error!("Failed to response result from directory");
-        return Ok(invalid_reply("invalid game id"));
+        match rx.await {
+            Ok(Some(x)) => x,
+            Ok(None) => return rep_unauthorized("invalid game id"),
+            Err(e) => {
+                error!("Failed to get result from directory: {:?}", e);
+                return rep_error("Failed to register player to game");
+            }
+        }
     };
 
-    let code_ok = warp::http::StatusCode::OK;
-    Ok(warp::reply::with_status("", code_ok))
+    // create player task channel
+    let (player_tx, mut player_rx) = mpsc::channel::<PlayerNotification>(1024);
+
+    // register player and get player info from the game task
+    let pinfo: PlayerInfo = {
+        if let Err(x) = game_tx.send(GameReq::RegisterPlayer(player_tx)).await {
+            error!("Error sending RegisterPlayer request: {:?}", x);
+            return rep_error("Failed to register player to game");
+        }
+
+        match player_rx.recv().await {
+            Some(PlayerNotification::RegistrationResult(Ok(x))) => x,
+            Some(PlayerNotification::RegistrationResult(Err(e))) => return rep_conflict(e),
+            r => {
+                error!("Error sending RegisterPlayer request: {:?}", r);
+                return rep_error("Failed to register player to game");
+            }
+        }
+    };
+
+    // Here we define what will happen at a later point in time (when the protocol upgrade happens)
+    // and we return rep which is a reply that will execute the upgrade and spawn a task with our
+    // closure.
+    let rep = ws.on_upgrade(|websocket| async move {
+        let (ws_tx, ws_rx) = websocket.split();
+        // We either:
+        // receive requests from the game thread and send them to the client
+        // receive requests from the client and send them to the game thread
+        unimplemented!()
+    });
+
+    Ok(Box::new(rep))
 }
 
 
@@ -384,18 +431,13 @@ async fn main() {
     let pkg_r = warp::path("pkg").and(warp::fs::dir("frontend/pkg/"));
 
     // GET /ws -> websocket for playing the game
-    let ws = warp::path("ws")
+    let connect_r = warp::path("ws")
         .and(warp::header("game_id"))
-        .and(warp::header("auth_id"))
         .and(warp::ws()) // prepare the websocket handshake
-        .and_then(
-            move |game_id, auth_id, ws| {
-                create_ws(game_id, auth_id, ws, dir_tx.clone())
-            }
-        );
+        .and_then(move |game_id, ws| start_player(game_id, ws, dir_tx.clone()) );
 
 
-    let routes = index_r.or(pkg_r).or(hello_r).or(create_r).with(log);
+    let routes = index_r.or(pkg_r).or(hello_r).or(create_r).or(connect_r).with(log);
     let sockaddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 8080);
 
     warp::serve(routes).run(sockaddr).await;
