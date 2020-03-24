@@ -26,22 +26,31 @@ pub struct CreateRep {
 pub struct PreReq {
 }
 
+/// External information for a player
 #[derive(Debug, Copy, Clone, Serialize, Deserialize)]
 pub struct PlayerInfo {
     /// player id (0 is admin of the game)
-    pub id: usize,
+    pub admin: bool,
     /// table position
     pub tpos: u8,
 }
 
-/// Pre-game state info
+/// Lobby state info
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct PreInfo {
+pub struct LobbyInfo {
     pub players: Vec<PlayerInfo>,
     pub nplayers: u8, // total number of players for the game
 }
 
-impl PlayerInfo {
-    // NB: if we implement player remove, this would have to change
-    pub fn is_admin(&self) -> bool { self.id == 0 }
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct GameInfo { }
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct GameEndInfo { }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum ServerInfo {
+    InLobby(LobbyInfo),
+    InGame(GameInfo),
+    GameEnd(GameEndInfo),
 }

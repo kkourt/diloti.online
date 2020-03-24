@@ -269,8 +269,8 @@ impl Default for GameSt {
 impl Default for Model {
     fn default() -> Self {
         Self::Init(InitSt {
-            nplayers: 1,
-            last_valid_nplayers: 1,
+            nplayers: 2,
+            last_valid_nplayers: 2,
             start_game_err: None,
         })
         // Self::InGame(GameSt::default())
