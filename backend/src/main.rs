@@ -85,6 +85,7 @@ async fn create_game(req: common::CreateReq, mut dir_tx: mpsc::Sender<directory_
 
 async fn start_player(
     game_id_s: String,
+    player_name: String,
     ws: warp::ws::Ws,
     mut dir_tx: mpsc::Sender<directory_task::DirReq>,
 ) -> Result<Box<dyn warp::Reply>, std::convert::Infallible> {
@@ -119,7 +120,7 @@ async fn start_player(
         }
     };
 
-    match player::player_setup(ws, game_tx).await {
+    match player::player_setup(ws, game_tx, player_name).await {
         Err(code) => rep_with_code("Error registering player into game", code),
         Ok(rep) => Ok(Box::new(rep)),
     }
@@ -159,11 +160,12 @@ async fn main() {
             .and_then(move |req| { create_game(req, dir_tx_.clone()) })
     };
 
-    // GET /ws/:game_id: -> websocket for joininjoining the game
+    // GET /ws/:game_id: -> websocket for joining the game
     let connect_r = warp::path("ws")
         .and(warp::path::param())
+        .and(warp::path::param())
         .and(warp::ws()) // prepare the websocket handshake
-        .and_then(move |game_id, ws| start_player(game_id, ws, dir_tx.clone()) );
+        .and_then(move |game_id, player_name, ws| start_player(game_id, player_name, ws, dir_tx.clone()) );
 
 
     let routes = index_r.or(pkg_r).or(hello_r).or(create_r).or(connect_r).with(log);

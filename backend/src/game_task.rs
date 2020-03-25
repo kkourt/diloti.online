@@ -13,7 +13,8 @@ use crate::player_task::PlayerTaskTx;
 /// Game task requests
 #[derive(Debug)]
 pub enum GameReq {
-    RegisterPlayer(PlayerTaskTx),
+    // Player name
+    RegisterPlayer(PlayerTaskTx, String),
 }
 
 /// Channel for {<player_tasks>, ???} -> <game_task> communication

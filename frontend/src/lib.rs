@@ -7,6 +7,7 @@ extern crate rand_pcg;
 extern crate web_sys;
 extern crate wasm_bindgen;
 extern crate serde_json;
+extern crate url;
 
 use rand::SeedableRng;
 use seed::{*, prelude::*};
@@ -18,6 +19,8 @@ use common::{CreateReq, CreateRep, /* PreReq */};
 
 type XRng = rand_pcg::Pcg64;
 
+const DEFAULT_NR_PLAYERS: u8 = 2;
+
 /// Initial state
 
 #[derive(Clone,Debug)]
@@ -25,14 +28,15 @@ enum InitMsg {
     StartGame,
     StartGameReply(ResponseDataResult<CreateRep>),
     SetPlayerCount(String),
+    SetPlayerName(String),
 }
 
 struct InitSt {
     /// Number of players
     nplayers: u8,
-    last_valid_nplayers: u8,
     /// Error when trying to start a game
     start_game_err: Option<String>,
+    player_name: String,
 }
 
 fn get_create_game_req_url() -> impl Into<std::borrow::Cow<'static, str>> {
@@ -51,7 +55,11 @@ impl InitSt {
                     Ok(rep) => {
                         return Some(Model::InLobby(
                             // TODO: proper error checking
-                            LobbySt::new(self.nplayers, rep.game_id.clone(), orders).unwrap()
+                            LobbySt::new(
+                                rep.game_id.clone(),
+                                self.player_name.clone(),
+                                orders,
+                            ).unwrap()
                         ));
                     }
 
@@ -62,6 +70,16 @@ impl InitSt {
             },
 
             InitMsg::StartGame => {
+                if self.player_name.len() == 0 {
+                    self.start_game_err = Some(format!("Please select a non-empty name"));
+                    return None;
+                }
+
+                if !self.player_name.chars().all(char::is_alphanumeric) {
+                    self.start_game_err = Some(format!("Please only use alphanumeric characters for the name"));
+                    return None;
+                }
+
                 let url = get_create_game_req_url();
                 let req_body = CreateReq { nplayers: self.nplayers };
                 let req = Request::new(url.into())
@@ -74,56 +92,145 @@ impl InitSt {
             InitMsg::SetPlayerCount(x) => {
                 if x == "1" {
                     self.nplayers = 1;
-                    self.last_valid_nplayers = self.nplayers;
                 } else if x == "2" {
                     self.nplayers = 2;
-                    self.last_valid_nplayers = self.nplayers;
                 } else if x == "4" {
                     self.nplayers = 4;
                 } else {}
-            }
+            },
+
+            InitMsg::SetPlayerName(x) => {
+                log!("SetPlayerName: {x}", x);
+                self.player_name = x.to_string();
+            },
         };
 
         None
     }
 
-    fn view(&self) -> Node<Msg> {
-
-        let (msg, attr) = match self.nplayers {
-            1 => (span![], attrs!{At::Value => "1"}),
-            2 => (span![], attrs!{At::Value => "2"}),
-            4 => (span![], attrs!{At::Value => "4"}),
-            /*
-            4 => (span![style!{"color" => "red"}, " (Sorry, four players not yet supported)"],
-                  attrs!{At::Value => format!("{}", self.last_valid_nplayers)}),
-            */
+    fn select_nplayers(&self) -> Node<Msg> {
+        let mut attrs = match self.nplayers {
+            1 => attrs!{At::Value => "1"},
+            2 => attrs!{At::Value => "2"},
+            4 => attrs!{At::Value => "4"},
             x => panic!("Invalid player count: {}", x),
         };
-
-        let mut ret = div![
-            h2!["Welcome!"],
-
-            span!["Number of players: "],
+        attrs.add(At::Id, "sel-nplayers");
+        assert_eq!(DEFAULT_NR_PLAYERS, 2);
+        div![
+            label!["Number of players: ", attrs! {At::For => "sel-nplayers" }],
             select![
-                attr,
+                attrs,
                 option!["1 (debug)", attrs!{At::Value => "1"}],
-                option!["2", attrs!{At::Value => "2"}],
+                option!["2", attrs!{At::Value => "2", At::Selected => "selected"}],
                 option!["4", attrs!{At::Value => "4"}],
                 input_ev(Ev::Input, |x| Msg::Init(InitMsg::SetPlayerCount(x)))
             ],
-            span![msg],
+        ]
+    }
 
-            p![""],
+    fn set_name(&self) -> Node<Msg> {
+        div![
+            label!["Your name: ", attrs!{At::For => "set-name" }],
+            input![
+                input_ev(Ev::Input, |x| Msg::Init(InitMsg::SetPlayerName(x))),
+                attrs! {
+                    At::Id => "set-name",
+                    At::Value => self.player_name,
+                }
+            ]
+        ]
+    }
+
+    fn view(&self) -> Node<Msg> {
+        let mut ret = div![
+            h2!["Create new game"],
+            self.set_name(),
+            self.select_nplayers(),
+
             button![
                 simple_ev(Ev::Click, Msg::Init(InitMsg::StartGame)),
-                "Start new game",
+                "Start!",
                 style![St::MarginRight => px(10)],
             ],
         ];
 
         if let Some(x) = &self.start_game_err {
             ret.add_child(span!["Failed! :-("]);
-            ret.add_child(p![format!("Error:{:?}", x)]);
+            ret.add_child(p![format!("Error: {}", x)]);
+        }
+
+        ret
+    }
+}
+
+/// Join state
+
+#[derive(Debug, Clone)]
+enum JoinMsg {
+    JoinGame,
+    SetPlayerName(String),
+}
+
+struct JoinSt {
+    game_id: String,
+    player_name: String,
+    join_game_err: Option<String>,
+}
+
+impl JoinSt {
+    fn update_state(&mut self, msg: &JoinMsg, orders: &mut impl Orders<Msg>) -> Option<Model> {
+        match msg {
+            JoinMsg::JoinGame => {
+                if self.player_name.len() == 0 {
+                    self.join_game_err = Some(format!("Please select a non-empty name"));
+                    return None;
+                }
+
+                if !self.player_name.chars().all(char::is_alphanumeric) {
+                    self.join_game_err = Some(format!("Please only use alphanumeric characters for the name"));
+                    return None;
+                }
+                Some(Model::InLobby(LobbySt::new(
+                    self.game_id.clone(),
+                    self.player_name.clone(),
+                    orders
+                ).unwrap()))
+            },
+            JoinMsg::SetPlayerName(name) => {
+                self.player_name = name.to_string();
+                None
+            },
+        }
+    }
+
+    fn set_name(&self) -> Node<Msg> {
+        div![
+            label!["Your name: ", attrs!{At::For => "set-name" }],
+            input![
+                input_ev(Ev::Input, |x| Msg::Join(JoinMsg::SetPlayerName(x))),
+                attrs! {
+                    At::Id => "set-name",
+                    At::Value => self.player_name,
+                }
+            ]
+        ]
+    }
+
+    fn view(&self) -> Node<Msg> {
+        let mut ret = div![
+            h2!["Join game"],
+            self.set_name(),
+            button![
+                simple_ev(Ev::Click, Msg::Join(JoinMsg::JoinGame)),
+                "Join!",
+                style![St::MarginRight => px(10)],
+            ],
+        ];
+
+        if let Some(x) = &self.join_game_err {
+            ret.add_child(span!["Failed! :-("]);
+            ret.add_child(p![format!("Error: {}", x)]);
         }
 
         ret
@@ -142,6 +249,7 @@ struct LobbySt {
     lobby_info: Option<common::LobbyInfo>,
     /// game identifier
     game_id: String,
+    player_name: String,
     /// websocket to server
     ws: web_sys::WebSocket,
     ws_state: WsState,
@@ -181,11 +289,11 @@ impl LobbySt {
         let mut player_rows : Vec<Node<Msg>> = vec![];
         for i in 0..lobby_info.nplayers {
             // player id column
-            let td_p = td![format!("P{}", i+1)];
-            let (td_status, td_other) = {
+            let td_p = td![format!("P{}: ", i+1)];
+            let (td_name, td_status, td_other) : (Node<Msg>, Node<Msg>, Node<Msg>) = {
                 let pinfo = lobby_info.players.iter().enumerate().find( |(_, pi)| pi.tpos == i);
                 match pinfo {
-                    None => (td!["waiting"], td![""]),
+                    None => (td![""], td!["empty"], td![""]),
                     Some((xid, info)) => {
                         let td_other = {
                             let mut other = vec![];
@@ -193,25 +301,29 @@ impl LobbySt {
                                 other.push("you!");
                             }
                             if info.admin {
-                                other.push("admin");
+                                other.push("game admin");
                             }
 
                             if other.len() == 0 {
                                 td![""]
                             } else {
-                                td![format!("{}", other.join(","))]
+                                td![format!("({})", other.join(", "))]
                             }
                         };
-                        (td!["connected"], td_other)
+                        (td![info.name], td!["ready"], td_other)
                     }
                 }
             };
-            player_rows.push(tr![td_p, td_status, td_other])
+            player_rows.push(tr![td_p, td_name, td_status, td_other])
         }
 
+        let hname = web_sys::window().unwrap().location().host().unwrap();
+        let join_href = format!("{}/?join={}", hname, self.game_id);
         div![
+            p!["join link: ", a![attrs! {At::Href => join_href}, join_href]],
+            p![""],
             h3!["Players"],
-            table![player_rows]
+            table![player_rows],
         ]
     }
 
@@ -243,6 +355,8 @@ impl LobbySt {
                     _ => panic!("Unexpected message: {:?}", srv_msg),
                 });
             },
+            // TODO: have some kind of error model... (or reconnect?)
+            // (WsEvent::WsClose(_), _) => _,
             _ => panic!("Invalid websocket state/message ({:?}/{:?})", ev, self.ws_state)
         };
 
@@ -250,10 +364,17 @@ impl LobbySt {
     }
 
 
-    fn new(_nplayers: u8, game_id: String, orders: &mut impl Orders<Msg>) -> Result<LobbySt,String> {
+    fn new(
+        game_id: String,
+        player_name: String,
+        orders: &mut impl Orders<Msg>
+    ) -> Result<LobbySt,String> {
         let hname = web_sys::window().unwrap().location().host().unwrap();
-        let ws_url = format!("ws://{}/ws/{}", hname, game_id);
+        let ws_url = format!("ws://{}/ws/{}/{}", hname, game_id, player_name);
         // log(format!("**************** ws_url={}", ws_url));
+        if let Some(storage) = seed::storage::get_storage() {
+            seed::storage::store_data(&storage, "player_name", &player_name);
+        }
 
         let ws = web_sys::WebSocket::new(&ws_url).unwrap();
 
@@ -280,6 +401,7 @@ impl LobbySt {
         let ret = LobbySt {
             lobby_info: None,
             game_id: game_id,
+            player_name: player_name,
             ws: ws,
             ws_state: WsState::Init,
         };
@@ -329,12 +451,19 @@ impl Default for GameSt {
     }
 }
 
+
 impl Default for Model {
     fn default() -> Self {
+        let player_name = if let Some(storage) = seed::storage::get_storage() {
+            seed::storage::load_data(&storage, "player_name")
+        } else {
+            None
+        }.unwrap_or("".to_string());
+
         Self::Init(InitSt {
-            nplayers: 2,
-            last_valid_nplayers: 2,
+            nplayers: DEFAULT_NR_PLAYERS,
             start_game_err: None,
+            player_name: player_name,
         })
         // Self::InGame(GameSt::default())
     }
@@ -494,6 +623,7 @@ enum WsState {
 
 enum Model {
     Init(InitSt),
+    Join(JoinSt),
     InLobby(LobbySt),
     InGame(GameSt),
 }
@@ -501,6 +631,7 @@ enum Model {
 #[derive(Clone,Debug)]
 enum Msg {
     Init(InitMsg),
+    Join(JoinMsg),
     InGame(InGameMsg),
     Lobby(LobbyMsg),
     Ws(WsEvent),
@@ -510,6 +641,7 @@ fn update(msg: Msg, mut model: &mut Model, orders: &mut impl Orders<Msg>) {
     log(format!("update => {:?}", msg));
     let upd_ret = match (&mut model, msg) {
         (&mut Model::Init(st), Msg::Init(ref msg))     => st.update_state(msg, orders),
+        (&mut Model::Join(st), Msg::Join(ref msg))     => st.update_state(msg, orders),
         (&mut Model::InLobby(st), Msg::Lobby(ref msg)) => st.update_state(msg, orders),
         (&mut Model::InLobby(st), Msg::Ws(ref msg))    => st.handle_ws_event(msg, orders),
         (&mut Model::InGame(st), Msg::InGame(ref msg)) => st.update_state(msg),
@@ -524,12 +656,43 @@ fn update(msg: Msg, mut model: &mut Model, orders: &mut impl Orders<Msg>) {
 fn view(model: &Model) -> impl View<Msg> {
     match model {
         Model::Init(st) => st.view(),
+        Model::Join(st) => st.view(),
         Model::InGame(st) => st.view(),
         Model::InLobby(st) => st.view(),
     }
 }
 
+fn after_mount(url: Url, orders: &mut impl Orders<Msg>) -> AfterMount<Model> {
+    let href = web_sys::window().unwrap().location().href().expect("href not found");
+    let url = url::Url::parse(&href).expect("invalid url");
+    let join_game_id = url.query_pairs().find(|(k,_v)| k == "join").map(|(_k,v)| v);
+
+    let player_name = if let Some(storage) = seed::storage::get_storage() {
+        seed::storage::load_data(&storage, "player_name")
+    } else {
+        None
+    }.unwrap_or("".to_string());
+
+    if let Some(game_id) = join_game_id {
+        let joinst = JoinSt {
+            game_id: game_id.to_string(),
+            player_name: player_name,
+            join_game_err: None,
+        };
+        AfterMount::new(Model::Join(joinst))
+    } else {
+        let initst = InitSt {
+            nplayers: DEFAULT_NR_PLAYERS,
+            player_name: player_name,
+            start_game_err: None,
+        };
+        AfterMount::new(Model::Init(initst))
+    }
+}
+
 #[wasm_bindgen(start)]
 pub fn render() {
-    App::builder(update, view).build_and_start();
+    App::builder(update, view)
+        .after_mount(after_mount)
+        .build_and_start();
 }

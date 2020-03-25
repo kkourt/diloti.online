@@ -38,6 +38,7 @@ enum State {
     InLobby,
     InGame,
     GameEnd,
+    Error(String),
 }
 
 struct Game {
@@ -65,12 +66,9 @@ impl Game {
     }
 
 
-    pub fn get_player_info(&self, pid: PlayerId) {
-    }
-
     /// add a new player, and return its reference
     /// Fails if we 've already reached the maximum number of players.
-    fn new_player(&mut self, ptx: &PlayerTaskTx) -> Result<PlayerId, String> {
+    fn new_player(&mut self, ptx: &PlayerTaskTx, player_name: String) -> Result<PlayerId, String> {
 
         let len = self.players.len();
 
@@ -81,7 +79,11 @@ impl Game {
         }
 
         let p = Player {
-            player_info: common::PlayerInfo { tpos: len as u8, admin: len == 0, },
+            player_info: common::PlayerInfo {
+                tpos: len as u8,
+                admin: len == 0,
+                name: player_name,
+            },
             tx: ptx.clone(),
         };
         self.players.push(p);
@@ -96,27 +98,27 @@ impl Game {
     fn get_player_mut(&mut self, pid: PlayerId) -> &mut Player {
         self.players.get_mut(pid.0).unwrap()
     }
-
-    fn get_info_for_player(&self, pid: PlayerId) -> common::ServerMsg {
+    pub async fn send_info_to_players(&mut self) {
         match self.state {
-            State::InLobby => common::ServerMsg::InLobby(common::LobbyInfo {
-                nplayers: self.cfg.nplayers,
-                players: self.players.iter().map(|x: &Player| x.player_info).collect(),
-                self_id: pid.0,
-            }),
-            _ => unimplemented!(),
-        }
-    }
+            State::InLobby => {
+                let players : Vec<common::PlayerInfo>
+                    = self.players.iter().map(|x: &Player| x.player_info.clone()).collect();
+                for pid in 0..self.players.len() {
+                    let player = &mut self.players[pid];
+                    let climsg = common::ServerMsg::InLobby(common::LobbyInfo {
+                        nplayers: self.cfg.nplayers,
+                        players: players.clone(),
+                        self_id: pid,
+                    });
+                    let msg = PlayerTaskMsg::ForwardToClient(climsg);
+                    if let Err(x) = player.tx.send(msg).await {
+                        eprintln!("Error sending msg to player {:?}", x);
+                        // TODO: remove player or retry
+                    }
+                }
+            },
 
-    pub async fn  send_info_to_player(&mut self, pid: PlayerId) {
-        let msg = PlayerTaskMsg::ForwardToClient(
-            self.get_info_for_player(pid)
-        );
-        let player = self.get_player_mut(pid);
-        if let Err(x) = player.tx.send(msg).await {
-            eprintln!("Error sending msg to player {:?}", x);
-            // TODO: remove player?
-            unimplemented!()
+            _ => unimplemented!(),
         }
     }
 
@@ -125,9 +127,9 @@ impl Game {
 
         while let Some(cmd) = self.self_rx.recv().await {
             match cmd {
-                GameReq::RegisterPlayer(mut pl_tx) => {
+                GameReq::RegisterPlayer(mut pl_tx, name) => {
                     // Send a registration result to the player task
-                    let ret = self.new_player(&pl_tx);
+                    let ret = self.new_player(&pl_tx, name);
                     let rep = PlayerTaskMsg::RegistrationResult(ret.clone());
                     if let Err(x) = pl_tx.send(rep).await {
                         eprintln!("Error sending RegisterPlayer reply: {:?}", x);
@@ -136,8 +138,8 @@ impl Game {
                     }
 
                     if let Ok(pid) = ret {
-                        // If registration was succesful, send player game info
-                        self.send_info_to_player(pid).await;
+                        // If registration was succesful, send player game info to everyone.
+                        self.send_info_to_players().await;
                     }
                 }
             }

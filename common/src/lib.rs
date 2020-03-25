@@ -25,12 +25,14 @@ pub struct JoinReq { }
  */
 
 /// External information for a player
-#[derive(Debug, Copy, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PlayerInfo {
     /// player id (0 is admin of the game)
     pub admin: bool,
     /// table position
     pub tpos: u8,
+    /// player name
+    pub name: String,
 }
 
 /// Lobby state info

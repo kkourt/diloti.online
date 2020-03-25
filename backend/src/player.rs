@@ -16,14 +16,16 @@ use futures::{SinkExt,StreamExt};
 
 pub async fn player_setup(
     ws: warp::ws::Ws,
-    mut game_tx: GameTaskTx)
--> Result<impl warp::reply::Reply, StatusCode> {
+    mut game_tx: GameTaskTx,
+    player_name: String,
+) -> Result<impl warp::reply::Reply, StatusCode> {
     // create player task channel
     let (player_tx, mut player_rx) = tokio::sync::mpsc::channel::<PlayerTaskMsg>(1024);
 
     // register player and get player info from the game task
     let pid: game::PlayerId = {
-        if let Err(x) = game_tx.send(GameReq::RegisterPlayer(player_tx)).await {
+        let req = GameReq::RegisterPlayer(player_tx, player_name);
+        if let Err(x) = game_tx.send(req).await {
             log::error!("Error sending RegisterPlayer request: {:?}", x);
             return Err(StatusCode::INTERNAL_SERVER_ERROR);
         }
