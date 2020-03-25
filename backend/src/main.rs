@@ -18,7 +18,6 @@ mod chararr_id;
 
 // use futures::future;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
-use futures::{StreamExt};
 use tokio;
 use tokio::sync::{mpsc, oneshot};
 use warp;
@@ -92,9 +91,9 @@ async fn start_player(
 
     // shortcuts for some replies
     // NB: we a trait object to have a common return type. Not sure if there is a better way.
-    let rep_unauthorized = |s| Ok(Box::new(rep_with_unauthorized(s)) as Box<dyn warp::Reply>);
-    let rep_error        = |s| Ok(Box::new(rep_with_internal_error(s)) as Box<dyn warp::Reply>);
-    let rep_conflict     = |s| Ok(Box::new(rep_with_conflict(s)) as Box<dyn warp::Reply>);
+    let rep_with_code    = |s,c| Ok(Box::new(warp::reply::with_status(s,c)) as Box<dyn warp::Reply>);
+    let rep_unauthorized = |s|   Ok(Box::new(rep_with_unauthorized(s)) as Box<dyn warp::Reply>);
+    let rep_error        = |s|   Ok(Box::new(rep_with_internal_error(s)) as Box<dyn warp::Reply>);
 
     let game_id = match game::GameId::from_string(&game_id_s) {
         None => return rep_unauthorized("invalid game id"),
@@ -102,7 +101,7 @@ async fn start_player(
     };
 
     // contact directory server to get the tx endpoint for the game task
-    let mut game_tx: game_task::GameTaskTx = {
+    let game_tx: game_task::GameTaskTx = {
         // create a oneshot channel for the reply
         let (tx, rx) = oneshot::channel::<Option<game_task::GameTaskTx>>();
         if let Err(x) = dir_tx.send(directory_task::DirReq::GetGameHandle(game_id, tx)).await {
@@ -120,44 +119,10 @@ async fn start_player(
         }
     };
 
-    // create player task channel
-    let (player_tx, mut player_rx) = tokio::sync::mpsc::channel::<player_task::PlayerTaskMsg>(1024);
-
-    // register player and get player info from the game task
-    let pid: game::PlayerId = {
-        if let Err(x) = game_tx.send(game_task::GameReq::RegisterPlayer(player_tx)).await {
-            log::error!("Error sending RegisterPlayer request: {:?}", x);
-            return rep_error("Failed to register player to game");
-        }
-
-        match player_rx.recv().await {
-            Some(player_task::PlayerTaskMsg::RegistrationResult(Ok(x))) => x,
-            Some(player_task::PlayerTaskMsg::RegistrationResult(Err(e))) => return rep_conflict(e),
-            r => {
-                log::error!("Error sending RegisterPlayer request: {:?}", r);
-                return rep_error("Failed to register player to game");
-            }
-        }
-    };
-
-    // Here we define what will happen at a later point in time (when the protocol upgrade happens)
-    // and we return rep which is a reply that will execute the upgrade and spawn a task with our
-    // closure.
-    let rep = ws.on_upgrade(|websocket| async move {
-        let (ws_tx, mut ws_rx) = websocket.split();
-        // We either:
-        // receive requests from the game tasj and send them to the client
-        // receive requests from the client and send them to the game task
-        loop {
-            tokio::select! {
-                cli_req = ws_rx.next() => unimplemented!(),
-                game_req = player_rx.next() => unimplemented!(),
-                else => break,
-            };
-        }
-    });
-
-    Ok(Box::new(rep))
+    match player::player_setup(ws, game_tx).await {
+        Err(code) => rep_with_code("Error registering player into game", code),
+        Ok(rep) => Ok(Box::new(rep)),
+    }
 }
 
 
@@ -194,7 +159,7 @@ async fn main() {
             .and_then(move |req| { create_game(req, dir_tx_.clone()) })
     };
 
-    // GET /ws -> websocket for playing the game
+    // GET /ws/:game_id: -> websocket for joininjoining the game
     let connect_r = warp::path("ws")
         .and(warp::path::param())
         .and(warp::ws()) // prepare the websocket handshake

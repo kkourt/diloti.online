@@ -16,6 +16,7 @@ pub enum PlayerTaskMsg {
     /// This is the first message passed after registration.
     /// If ther registration is successful, it includes a player id that will never change.
     RegistrationResult(Result<PlayerId, String>),
+    ForwardToClient(common::ServerMsg),
 }
 
 /// Channel for <game_task> -> <player_task> communication

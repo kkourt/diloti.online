@@ -34,12 +34,19 @@ struct Player {
 #[derive(Debug)]
 pub struct GameScore;
 
+enum State {
+    InLobby,
+    InGame,
+    GameEnd,
+}
+
 struct Game {
     players: Vec<Player>, // player players[0] is admin
     self_rx: GameTaskRx,
     dir_tx: DirTaskTx,
     gid: GameId,
     cfg: GameConfig,
+    state: State,
 
     // curr_game: Option<core::Game>,
     //score: GameScore,
@@ -53,11 +60,12 @@ impl Game {
             self_rx: self_rx,
             dir_tx: dir_tx,
             cfg: cfg,
+            state: State::InLobby,
         }
     }
 
-    fn get_player_by_id(&self, id: usize) -> Option<&Player> {
-        self.players.get(id)
+
+    pub fn get_player_info(&self, pid: PlayerId) {
     }
 
     /// add a new player, and return its reference
@@ -81,18 +89,55 @@ impl Game {
         Ok(PlayerId(len))
     }
 
+    fn get_player(&self, pid: PlayerId) -> &Player {
+        self.players.get(pid.0).unwrap()
+    }
+
+    fn get_player_mut(&mut self, pid: PlayerId) -> &mut Player {
+        self.players.get_mut(pid.0).unwrap()
+    }
+
+    fn get_info_for_player(&self, pid: PlayerId) -> common::ServerMsg {
+        match self.state {
+            State::InLobby => common::ServerMsg::InLobby(common::LobbyInfo {
+                nplayers: self.cfg.nplayers,
+                players: self.players.iter().map(|x: &Player| x.player_info).collect(),
+                self_id: pid.0,
+            }),
+            _ => unimplemented!(),
+        }
+    }
+
+    pub async fn  send_info_to_player(&mut self, pid: PlayerId) {
+        let msg = PlayerTaskMsg::ForwardToClient(
+            self.get_info_for_player(pid)
+        );
+        let player = self.get_player_mut(pid);
+        if let Err(x) = player.tx.send(msg).await {
+            eprintln!("Error sending msg to player {:?}", x);
+            // TODO: remove player?
+            unimplemented!()
+        }
+    }
+
     async fn task(mut self, rep_tx: oneshot::Sender<common::CreateRep>) {
         self.task_init(rep_tx).await;
 
         while let Some(cmd) = self.self_rx.recv().await {
             match cmd {
                 GameReq::RegisterPlayer(mut pl_tx) => {
+                    // Send a registration result to the player task
                     let ret = self.new_player(&pl_tx);
-                    let rep = PlayerTaskMsg::RegistrationResult(ret);
+                    let rep = PlayerTaskMsg::RegistrationResult(ret.clone());
                     if let Err(x) = pl_tx.send(rep).await {
                         eprintln!("Error sending RegisterPlayer reply: {:?}", x);
                         // TODO: remove player if they were registered (?)
                         unimplemented!()
+                    }
+
+                    if let Ok(pid) = ret {
+                        // If registration was succesful, send player game info
+                        self.send_info_to_player(pid).await;
                     }
                 }
             }

@@ -6,6 +6,7 @@ extern crate rand;
 extern crate rand_pcg;
 extern crate web_sys;
 extern crate wasm_bindgen;
+extern crate serde_json;
 
 use rand::SeedableRng;
 use seed::{*, prelude::*};
@@ -91,8 +92,11 @@ impl InitSt {
         let (msg, attr) = match self.nplayers {
             1 => (span![], attrs!{At::Value => "1"}),
             2 => (span![], attrs!{At::Value => "2"}),
+            4 => (span![], attrs!{At::Value => "4"}),
+            /*
             4 => (span![style!{"color" => "red"}, " (Sorry, four players not yet supported)"],
                   attrs!{At::Value => format!("{}", self.last_valid_nplayers)}),
+            */
             x => panic!("Invalid player count: {}", x),
         };
 
@@ -134,8 +138,8 @@ enum LobbyMsg {
 
 #[derive(Debug)]
 struct LobbySt {
-    /// Number of players
-    nplayers: u8,
+    /// server info
+    lobby_info: Option<common::LobbyInfo>,
     /// game identifier
     game_id: String,
     /// websocket to server
@@ -166,8 +170,57 @@ fn register_ws_handler<T, F>(
 
 
 impl LobbySt {
+
+    fn view_server_info(&self) -> Node<Msg> {
+        if self.lobby_info.is_none() {
+            return p![""];
+        }
+
+        let lobby_info: &common::LobbyInfo = self.lobby_info.as_ref().unwrap();
+
+        let mut player_rows : Vec<Node<Msg>> = vec![];
+        for i in 0..lobby_info.nplayers {
+            // player id column
+            let td_p = td![format!("P{}", i+1)];
+            let (td_status, td_other) = {
+                let pinfo = lobby_info.players.iter().enumerate().find( |(_, pi)| pi.tpos == i);
+                match pinfo {
+                    None => (td!["waiting"], td![""]),
+                    Some((xid, info)) => {
+                        let td_other = {
+                            let mut other = vec![];
+                            if xid == lobby_info.self_id {
+                                other.push("you!");
+                            }
+                            if info.admin {
+                                other.push("admin");
+                            }
+
+                            if other.len() == 0 {
+                                td![""]
+                            } else {
+                                td![format!("{}", other.join(","))]
+                            }
+                        };
+                        (td!["connected"], td_other)
+                    }
+                }
+            };
+            player_rows.push(tr![td_p, td_status, td_other])
+        }
+
+        div![
+            h3!["Players"],
+            table![player_rows]
+        ]
+    }
+
     fn view(&self) -> Node<Msg> {
-        h2!["Lobby"]
+        let lobby_info = self.view_server_info();
+        div![
+            h2!["Lobby"],
+            lobby_info,
+        ]
     }
 
     fn update_state(&mut self, msg: &LobbyMsg, _orders: &mut impl Orders<Msg>) -> Option<Model> {
@@ -180,7 +233,16 @@ impl LobbySt {
                 // change ws state to ready
                 log(format!("Connected: {}", jv.as_string().unwrap_or("<None>".to_string())));
                 self.ws_state = WsState::Ready;
-            }
+            },
+            (WsEvent::WsMessage(msg), WsState::Ready) => {
+                let txt = msg.data().as_string().expect("No data in server message");
+                log(format!("Received message {:?}", txt));
+                let srv_msg: common::ServerMsg = serde_json::from_str(&txt).unwrap();
+                self.lobby_info = Some(match srv_msg {
+                    common::ServerMsg::InLobby(x) => x,
+                    _ => panic!("Unexpected message: {:?}", srv_msg),
+                });
+            },
             _ => panic!("Invalid websocket state/message ({:?}/{:?})", ev, self.ws_state)
         };
 
@@ -188,7 +250,7 @@ impl LobbySt {
     }
 
 
-    fn new(nplayers: u8, game_id: String, orders: &mut impl Orders<Msg>) -> Result<LobbySt,String> {
+    fn new(_nplayers: u8, game_id: String, orders: &mut impl Orders<Msg>) -> Result<LobbySt,String> {
         let hname = web_sys::window().unwrap().location().host().unwrap();
         let ws_url = format!("ws://{}/ws/{}", hname, game_id);
         // log(format!("**************** ws_url={}", ws_url));
@@ -216,11 +278,12 @@ impl LobbySt {
             &ws, orders);
 
         let ret = LobbySt {
-            nplayers: nplayers,
+            lobby_info: None,
             game_id: game_id,
             ws: ws,
             ws_state: WsState::Init,
         };
+
         Ok(ret)
     }
 }

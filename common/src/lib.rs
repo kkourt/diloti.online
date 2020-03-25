@@ -17,14 +17,12 @@ pub struct CreateRep {
     pub game_id: String,
 }
 
-/**
- * Pre-game state
- */
-
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
-/// Empty for now
-pub struct PreReq {
-}
+pub struct JoinReq { }
+
+/**
+ * Lobby state
+ */
 
 /// External information for a player
 #[derive(Debug, Copy, Clone, Serialize, Deserialize)]
@@ -39,8 +37,16 @@ pub struct PlayerInfo {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct LobbyInfo {
     pub players: Vec<PlayerInfo>,
-    pub nplayers: u8, // total number of players for the game
+    pub self_id: usize, // self id in the vector (so that the player knows who they are)
+    pub nplayers: u8,   // total number of players for the game
 }
+
+
+
+/**
+ * In game state
+ */
+
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct GameInfo { }
@@ -49,7 +55,7 @@ pub struct GameInfo { }
 pub struct GameEndInfo { }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum ServerInfo {
+pub enum ServerMsg {
     InLobby(LobbyInfo),
     InGame(GameInfo),
     GameEnd(GameEndInfo),
