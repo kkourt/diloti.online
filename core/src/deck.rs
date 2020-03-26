@@ -8,10 +8,12 @@
 use rand::prelude::SliceRandom;
 use std::convert::TryFrom;
 
+use serde::{Deserialize, Serialize};
+
 use super::card::{Rank,Suit,Card};
 
 /// A Deck is an ordered collection of cards
-#[derive(Clone)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Deck {
     pub cards: Vec<Card>,
 }

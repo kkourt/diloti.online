@@ -8,6 +8,7 @@
  * Game task structures
  */
 
+use core::srvcli;
 use crate::player_task::PlayerTaskTx;
 
 /// Game task requests
@@ -15,6 +16,7 @@ use crate::player_task::PlayerTaskTx;
 pub enum GameReq {
     // Player name
     RegisterPlayer(PlayerTaskTx, String),
+    ClientReq(srvcli::PlayerId, srvcli::ClientMsg),
 }
 
 /// Channel for {<player_tasks>, ???} -> <game_task> communication

@@ -7,6 +7,8 @@
 use super::deck::Deck;
 use super::card::Card;
 
+use serde::{Deserialize, Serialize};
+
 // Rules:
 //  - https://cardgamesgr.blogspot.com/2014/07/diloti.html
 //  - http://alogomouris.blogspot.com/2011/02/blog-post_5755.html
@@ -17,36 +19,36 @@ use super::card::Card;
 
 // NB: User messages and actions need to refer to objects in the game state (e.g., cards)
 // I use indices in the game state array together with a version number as a sanity check.
-#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+#[derive(Copy, Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]
 pub struct GameVer(u64);
 
-#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+#[derive(Copy, Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]
 pub struct HandCardIdx(usize, GameVer);
 
-#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+#[derive(Copy, Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]
 pub struct TableEntryIdx(usize, GameVer);
 
 pub struct Player {
     pub hand: Deck,
 }
 
-#[derive(Copy, Clone, PartialEq, Eq)]
-pub struct PlayerId(pub u8);
+#[derive(Copy, Clone, PartialEq, Eq, Serialize, Deserialize, Debug)]
+pub struct PlayerTpos(pub u8);
 
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct Declaration {
     cards: Vec<Vec<Card>>,
-    player: PlayerId,
+    player: PlayerTpos,
     sum: u8,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize)]
 pub enum TableEntry {
     Card(Card),
     Decl(Declaration),
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct  Table {
     pub entries: Vec<TableEntry>,
 }
@@ -56,7 +58,7 @@ pub struct Game<R: rand::Rng> {
     pub main_deck: Deck,
     pub players: Vec<Player>,
 
-    pub turn: PlayerId,
+    pub turn: PlayerTpos,
 
     rng: R,
     ver: GameVer,
@@ -75,11 +77,13 @@ pub struct InvalidAction {
 }
 
 /// This a player's point of view of the game
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PlayerGameView {
-    pub pid: PlayerId,
+    pub pid: PlayerTpos,
     pub table: Table,
     pub own_hand: Deck,
     pub ver: GameVer,
+    pub turn: PlayerTpos,
 
     pub main_deck_sz: usize,
     pub player_decks_sz: Vec<usize>,
@@ -99,7 +103,7 @@ pub struct PlayerTurn {
 // NB: (52 - 4) / 6 = 8, so there are 4 rounds on a 4-player game and 8 rounds on a 2 player game
 //
 pub enum GameState {
-    NextPlayer(PlayerId),
+    NextPlayer(PlayerTpos),
     RoundDone,
     GameDone,
 }
@@ -125,7 +129,7 @@ impl<R: rand::Rng> Game<R> {
             table: Table { entries: vec![] },
             main_deck: deck,
             players: (0..nplayers).map( |_i| Player { hand: Deck::empty() } ).collect(),
-            turn: PlayerId(0),
+            turn: PlayerTpos(0),
             rng: rng,
             ver: GameVer(0),
         };
@@ -154,12 +158,13 @@ impl<R: rand::Rng> Game<R> {
 
     }
 
-    pub fn get_player_game_view(&self) -> PlayerGameView {
+    pub fn get_player_game_view(&self, pid: PlayerTpos) -> PlayerGameView {
         PlayerGameView {
-            pid: self.turn,
+            pid: pid,
             table: self.table.clone(),
-            own_hand: self.players[self.turn.0 as usize].hand.clone(),
+            own_hand: self.players[pid.0 as usize].hand.clone(),
             ver: self.ver,
+            turn: self.turn,
 
             main_deck_sz: self.main_deck.ncards(),
             player_decks_sz: self.players.iter().map(|p| p.hand.ncards()).collect(),
@@ -167,8 +172,9 @@ impl<R: rand::Rng> Game<R> {
     }
 
     pub fn start_player_turn(&self) -> PlayerTurn {
+        let pid = self.turn;
         PlayerTurn {
-            game_view: self.get_player_game_view(),
+            game_view: self.get_player_game_view(pid),
         }
     }
 
@@ -206,9 +212,9 @@ impl PlayerGameView {
 
 }
 
-impl std::fmt::Display for PlayerId {
+impl std::fmt::Display for PlayerTpos {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        let PlayerId(pid) = *self;
+        let PlayerTpos(pid) = *self;
         write!(f, "P{}", pid)
     }
 }

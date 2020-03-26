@@ -9,13 +9,13 @@ extern crate wasm_bindgen;
 extern crate serde_json;
 extern crate url;
 
-use rand::SeedableRng;
 use seed::{*, prelude::*};
 use wasm_bindgen::JsCast;
 
 use core;
 
-use common::{CreateReq, CreateRep, /* PreReq */};
+use core::srvcli;
+use core::srvcli::{CreateReq, CreateRep, LobbyInfo, ClientMsg, LobbyReq, ServerMsg, PlayerId};
 
 type XRng = rand_pcg::Pcg64;
 
@@ -241,18 +241,18 @@ impl JoinSt {
 
 #[derive(Debug,Clone)]
 enum LobbyMsg {
+    IssueStart,
 }
 
 #[derive(Debug)]
 struct LobbySt {
     /// server info
-    lobby_info: Option<common::LobbyInfo>,
+    lobby_info: Option<LobbyInfo>,
     /// game identifier
     game_id: String,
     player_name: String,
     /// websocket to server
-    ws: web_sys::WebSocket,
-    ws_state: WsState,
+    wsocket: std::rc::Rc<Wsocket>,
 }
 
 
@@ -279,25 +279,25 @@ fn register_ws_handler<T, F>(
 
 impl LobbySt {
 
-    fn view_server_info(&self) -> Node<Msg> {
+    fn view_players(&self) -> Node<Msg> {
         if self.lobby_info.is_none() {
             return p![""];
         }
 
-        let lobby_info: &common::LobbyInfo = self.lobby_info.as_ref().unwrap();
+        let lobby_info: &LobbyInfo = self.lobby_info.as_ref().unwrap();
 
         let mut player_rows : Vec<Node<Msg>> = vec![];
         for i in 0..lobby_info.nplayers {
-            // player id column
+            let tpos_i = srvcli::PlayerTpos(i);
             let td_p = td![format!("P{}: ", i+1)];
             let (td_name, td_status, td_other) : (Node<Msg>, Node<Msg>, Node<Msg>) = {
-                let pinfo = lobby_info.players.iter().enumerate().find( |(_, pi)| pi.tpos == i);
+                let pinfo = lobby_info.players.iter().enumerate().find( |(_, pi)| pi.tpos == tpos_i);
                 match pinfo {
                     None => (td![""], td!["empty"], td![""]),
                     Some((xid, info)) => {
                         let td_other = {
                             let mut other = vec![];
-                            if xid == lobby_info.self_id {
+                            if srvcli::PlayerId(xid) == lobby_info.self_id {
                                 other.push("you!");
                             }
                             if info.admin {
@@ -310,54 +310,92 @@ impl LobbySt {
                                 td![format!("({})", other.join(", "))]
                             }
                         };
-                        (td![info.name], td!["ready"], td_other)
+                        (td![info.name], td!["is ready"], td_other)
                     }
                 }
             };
             player_rows.push(tr![td_p, td_name, td_status, td_other])
+
         }
+
+
+
 
         let hname = web_sys::window().unwrap().location().host().unwrap();
         let join_href = format!("{}/?join={}", hname, self.game_id);
-        div![
+        let mut div = div![
             p!["join link: ", a![attrs! {At::Href => join_href}, join_href]],
             p![""],
             h3!["Players"],
             table![player_rows],
-        ]
+        ];
+
+        if lobby_info.players[lobby_info.self_id.0].admin {
+            let attrs = if lobby_info.nplayers as usize != lobby_info.players.len() {
+                attrs!{At::Disabled => "true"}
+            } else {
+                attrs!{}
+            };
+            let start_button = button![
+                simple_ev(Ev::Click, Msg::Lobby(LobbyMsg::IssueStart)),
+                "Start!",
+                attrs,
+            ];
+            div.add_child(start_button);
+        }
+
+        div
+
     }
 
     fn view(&self) -> Node<Msg> {
-        let lobby_info = self.view_server_info();
         div![
             h2!["Lobby"],
-            lobby_info,
+            self.view_players(),
         ]
     }
 
     fn update_state(&mut self, msg: &LobbyMsg, _orders: &mut impl Orders<Msg>) -> Option<Model> {
-        unimplemented!();
+        match msg {
+            LobbyMsg::IssueStart => {
+                let req = serde_json::to_string(&ClientMsg::InLobby(LobbyReq::StartGame)).unwrap();
+                if let Err(x) = self.wsocket.ws.send_with_str(&req) {
+                    error!("Failed to send data to server");
+                    unimplemented!();
+                }
+                None
+            },
+        }
     }
 
     fn handle_ws_event(&mut self, ev: &WsEvent, _orders: &mut impl Orders<Msg>) -> Option<Model> {
-        match (ev, self.ws_state) {
+        match (ev, self.wsocket.ws_state) {
             (WsEvent::WsConnected(jv), WsState::Init) => {
                 // change ws state to ready
                 log(format!("Connected: {}", jv.as_string().unwrap_or("<None>".to_string())));
-                self.ws_state = WsState::Ready;
+                {
+                    let ws = std::rc::Rc::get_mut(&mut self.wsocket).unwrap();
+                    ws.ws_state = WsState::Ready;
+                }
             },
             (WsEvent::WsMessage(msg), WsState::Ready) => {
                 let txt = msg.data().as_string().expect("No data in server message");
                 log(format!("Received message {:?}", txt));
-                let srv_msg: common::ServerMsg = serde_json::from_str(&txt).unwrap();
+                let srv_msg: ServerMsg = serde_json::from_str(&txt).unwrap();
                 self.lobby_info = Some(match srv_msg {
-                    common::ServerMsg::InLobby(x) => x,
+                    ServerMsg::InLobby(x) => x,
+                    ServerMsg::InGame(srvcli::GameInfo(pview)) => {
+                        let lobby_info : &LobbyInfo = self.lobby_info
+                            .as_ref()
+                            .expect("At this point, we should have received lobby info from the server");
+                        return Some(Model::InGame(GameSt::new(self, pview)));
+                    },
                     _ => panic!("Unexpected message: {:?}", srv_msg),
                 });
             },
             // TODO: have some kind of error model... (or reconnect?)
             // (WsEvent::WsClose(_), _) => _,
-            _ => panic!("Invalid websocket state/message ({:?}/{:?})", ev, self.ws_state)
+            _ => panic!("Invalid websocket state/message ({:?}/{:?})", ev, self.wsocket.ws_state)
         };
 
         None
@@ -376,34 +414,37 @@ impl LobbySt {
             seed::storage::store_data(&storage, "player_name", &player_name);
         }
 
-        let ws = web_sys::WebSocket::new(&ws_url).unwrap();
+        let wsocket = std::rc::Rc::<Wsocket>::new(Wsocket {
+            ws: web_sys::WebSocket::new(&ws_url).unwrap(),
+            ws_state: WsState::Init,
+        });
 
+        let ws = &wsocket.ws;
         register_ws_handler(
             web_sys::WebSocket::set_onopen,
             |jv| Msg::Ws(WsEvent::WsConnected(jv)),
-            &ws, orders);
+            ws, orders);
 
         register_ws_handler(
             web_sys::WebSocket::set_onclose,
             |jv| Msg::Ws(WsEvent::WsClose(jv)),
-            &ws, orders);
+            ws, orders);
 
         register_ws_handler(
             web_sys::WebSocket::set_onerror,
             |jv| Msg::Ws(WsEvent::WsError(jv)),
-            &ws, orders);
+            ws, orders);
 
         register_ws_handler(
             web_sys::WebSocket::set_onmessage,
             |me| Msg::Ws(WsEvent::WsMessage(me)),
-            &ws, orders);
+            ws, orders);
 
         let ret = LobbySt {
             lobby_info: None,
             game_id: game_id,
             player_name: player_name,
-            ws: ws,
-            ws_state: WsState::Init,
+            wsocket: wsocket,
         };
 
         Ok(ret)
@@ -428,28 +469,45 @@ enum TurnProgress {
 
 enum GamePhase {
     MyTurn(TurnProgress),
-    OthersTurn,
+    OthersTurn(PlayerId),
 }
 
 struct GameSt {
-    pub game: core::Game<XRng>,
-    pub phase: GamePhase,
-    pub view: core::PlayerGameView,
+    view: core::PlayerGameView,
+    phase: GamePhase,
+    lobby_info: LobbyInfo,
+
+    wsocket: std::rc::Rc<Wsocket>,
 }
 
+impl GameSt {
+    pub fn new(lobbyst: &LobbySt, pview: core::PlayerGameView) -> GameSt {
+        let lobby_info = lobbyst.lobby_info.as_ref().unwrap();
+        let phase = {
+            let turn_tpos = pview.turn;
+            let self_tpos = lobby_info.players[lobby_info.self_id.0].tpos;
+            if self_tpos == turn_tpos {
+                GamePhase::MyTurn(TurnProgress::Nothing)
+            } else {
+                let turn_pid = lobby_info.players
+                    .iter()
+                    .enumerate()
+                    .find( |(_, pi)| pi.tpos == turn_tpos)
+                    .map( |(i,_)| i)
+                    .unwrap();
+                GamePhase::OthersTurn(srvcli::PlayerId(turn_pid))
+            }
+        };
 
-impl Default for GameSt {
-    fn default() -> Self {
-        let rng = XRng::from_rng(rand::rngs::OsRng).expect("unable to initalize RNG");
-        let game = core::Game::new_2p(rng);
-        let view = game.get_player_game_view();
-        Self {
-            game: game,
-            view: view,
-            phase: GamePhase::MyTurn(TurnProgress::Nothing),
+        GameSt {
+            view: pview,
+            phase: phase,
+            lobby_info: lobby_info.clone(),
+            wsocket: lobbyst.wsocket.clone(),
         }
     }
 }
+
 
 
 impl Default for Model {
@@ -465,7 +523,6 @@ impl Default for Model {
             start_game_err: None,
             player_name: player_name,
         })
-        // Self::InGame(GameSt::default())
     }
 }
 
@@ -558,7 +615,7 @@ impl GameSt {
         };
 
         let msg = match self.phase {
-            GamePhase::OthersTurn => p!["Waiting for other player's turn"],
+            GamePhase::OthersTurn(_) => p!["Waiting for other player's turn"],
             GamePhase::MyTurn(TurnProgress::Nothing) => p!["Your turn! Select the card you want to play"],
             GamePhase::MyTurn(TurnProgress::CardSelected(c)) => {
                     let card = self.view.get_hand_card(&c);
@@ -619,6 +676,12 @@ enum WsState {
     Ready,
     Closed,
     Error,
+}
+
+#[derive(Debug)]
+struct Wsocket {
+    ws: web_sys::WebSocket,
+    ws_state: WsState,
 }
 
 enum Model {

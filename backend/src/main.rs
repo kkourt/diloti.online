@@ -5,6 +5,7 @@
 //#[macro_use]
 extern crate log;
 extern crate rand;
+extern crate rand_pcg;
 extern crate serde;
 extern crate serde_json;
 
@@ -22,6 +23,8 @@ use tokio;
 use tokio::sync::{mpsc, oneshot};
 use warp;
 use warp::Filter;
+
+use core::srvcli;
 
 // Here's the idea.
 // We want to build a server for playing a game
@@ -63,12 +66,12 @@ fn rep_with_conflict<T: warp::Reply>(reply: T) -> warp::reply::WithStatus<T> {
     return warp::reply::with_status(reply, code);
 }
 
-async fn create_game(req: common::CreateReq, mut dir_tx: mpsc::Sender<directory_task::DirReq>)
+async fn create_game(req: srvcli::CreateReq, mut dir_tx: mpsc::Sender<directory_task::DirReq>)
 -> Result<impl warp::Reply, std::convert::Infallible> {
     let cnf = game::GameConfig { nplayers: req.nplayers };
 
     // contact directory task to create a new game
-    let (tx, rx) = oneshot::channel::<common::CreateRep>();
+    let (tx, rx) = oneshot::channel::<srvcli::CreateRep>();
     if let Err(x) = dir_tx.send(directory_task::DirReq::CreateGame(cnf, tx)).await {
         log::error!("Error sending CreateGame request: {:?}", x);
         return Ok(rep_with_internal_error(String::from("")))

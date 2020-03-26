@@ -7,7 +7,9 @@
 use std::convert::TryFrom;
 use super::error as e;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Suit {
     /// ♠
     Spade,
@@ -19,11 +21,11 @@ pub enum Suit {
     Diamond,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Rank(u8);
 
 /// Game card
-#[derive(PartialEq, Eq, Clone)]
+#[derive(PartialEq, Eq, Clone, Serialize, Deserialize)]
 pub struct Card {
     pub suit: Suit,
     pub rank: Rank,

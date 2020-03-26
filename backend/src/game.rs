@@ -6,11 +6,15 @@
 
 use tokio::sync::{oneshot, mpsc};
 
+use core::srvcli;
+
 use crate::{
     game_task::{GameReq, GameTaskRx, GameTaskTx},
     player_task::{PlayerTaskMsg, PlayerTaskTx},
     directory_task::DirTaskTx,
 };
+use rand::SeedableRng;
+type Rng = rand_pcg::Pcg64;
 
 /**
  * Backend-side game structures
@@ -18,8 +22,6 @@ use crate::{
 
 pub use crate::chararr_id::GameId;
 
-#[derive(Debug, Clone, Copy)]
-pub struct PlayerId(usize); // Player (internal) identifier
 
 #[derive(Debug)]
 pub struct GameConfig {
@@ -27,7 +29,7 @@ pub struct GameConfig {
 }
 
 struct Player {
-    player_info: common::PlayerInfo,
+    player_info: srvcli::PlayerInfo,
     tx: PlayerTaskTx,
 }
 
@@ -49,12 +51,20 @@ struct Game {
     cfg: GameConfig,
     state: State,
 
-    // curr_game: Option<core::Game>,
-    //score: GameScore,
+    curr_game: core::Game<Rng>,
 }
 
 impl Game {
     pub fn new(gid: GameId, cfg: GameConfig, self_rx: GameTaskRx, dir_tx: DirTaskTx) -> Game {
+
+        let rng = Rng::from_rng(rand::rngs::OsRng).expect("unable to initalize RNG");
+        let game = match cfg.nplayers {
+            1 => unimplemented!(),
+            2 => core::Game::new_2p(rng),
+            4 => core::Game::new_4p(rng),
+            _ => panic!("Incorrect number of players"),
+        };
+
         Game {
             gid: gid,
             players: vec![],
@@ -62,13 +72,18 @@ impl Game {
             dir_tx: dir_tx,
             cfg: cfg,
             state: State::InLobby,
+            curr_game: game,
         }
     }
 
 
     /// add a new player, and return its reference
     /// Fails if we 've already reached the maximum number of players.
-    fn new_player(&mut self, ptx: &PlayerTaskTx, player_name: String) -> Result<PlayerId, String> {
+    fn new_player(
+        &mut self,
+        ptx: &PlayerTaskTx,
+        player_name: String
+    ) -> Result<srvcli::PlayerId, String> {
 
         let len = self.players.len();
 
@@ -79,8 +94,8 @@ impl Game {
         }
 
         let p = Player {
-            player_info: common::PlayerInfo {
-                tpos: len as u8,
+            player_info: srvcli::PlayerInfo {
+                tpos: srvcli::PlayerTpos(len as u8),
                 admin: len == 0,
                 name: player_name,
             },
@@ -88,32 +103,47 @@ impl Game {
         };
         self.players.push(p);
 
-        Ok(PlayerId(len))
+        Ok(srvcli::PlayerId(len))
     }
 
-    fn get_player(&self, pid: PlayerId) -> &Player {
+    fn get_player(&self, pid: srvcli::PlayerId) -> &Player {
         self.players.get(pid.0).unwrap()
     }
 
-    fn get_player_mut(&mut self, pid: PlayerId) -> &mut Player {
+    fn get_player_mut(&mut self, pid: srvcli::PlayerId) -> &mut Player {
         self.players.get_mut(pid.0).unwrap()
     }
     pub async fn send_info_to_players(&mut self) {
         match self.state {
             State::InLobby => {
-                let players : Vec<common::PlayerInfo>
+                let players : Vec<srvcli::PlayerInfo>
                     = self.players.iter().map(|x: &Player| x.player_info.clone()).collect();
                 for pid in 0..self.players.len() {
                     let player = &mut self.players[pid];
-                    let climsg = common::ServerMsg::InLobby(common::LobbyInfo {
+                    let climsg = srvcli::ServerMsg::InLobby(srvcli::LobbyInfo {
                         nplayers: self.cfg.nplayers,
                         players: players.clone(),
-                        self_id: pid,
+                        self_id: srvcli::PlayerId(pid),
                     });
                     let msg = PlayerTaskMsg::ForwardToClient(climsg);
                     if let Err(x) = player.tx.send(msg).await {
                         eprintln!("Error sending msg to player {:?}", x);
                         // TODO: remove player or retry
+                        unimplemented!();
+                    }
+                }
+            },
+
+            State::InGame => {
+                for player in self.players.iter_mut() {
+                    let tpos = player.player_info.tpos;
+                    let player_view = self.curr_game.get_player_game_view(tpos);
+                    let climsg = srvcli::ServerMsg::InGame(srvcli::GameInfo(player_view));
+                    let msg = PlayerTaskMsg::ForwardToClient(climsg);
+                    if let Err(x) = player.tx.send(msg).await {
+                        eprintln!("Error sending msg to player {:?}", x);
+                        // TODO: remove player or retry
+                        unimplemented!();
                     }
                 }
             },
@@ -122,7 +152,7 @@ impl Game {
         }
     }
 
-    async fn task(mut self, rep_tx: oneshot::Sender<common::CreateRep>) {
+    async fn task(mut self, rep_tx: oneshot::Sender<srvcli::CreateRep>) {
         self.task_init(rep_tx).await;
 
         while let Some(cmd) = self.self_rx.recv().await {
@@ -141,6 +171,10 @@ impl Game {
                         // If registration was succesful, send player game info to everyone.
                         self.send_info_to_players().await;
                     }
+                },
+
+                GameReq::ClientReq(pid, climsg) => {
+                    self.handle_clireq(pid, climsg).await
                 }
             }
         }
@@ -149,10 +183,41 @@ impl Game {
         unimplemented!()
     }
 
-    async fn task_init(&mut self, rep_tx: oneshot::Sender<common::CreateRep>) {
+    fn is_player_admin(&self, pid: srvcli::PlayerId) -> bool {
+        self.get_player(pid).player_info.admin
+    }
+
+    fn players_ready(&self) -> bool {
+        self.players.len() == self.cfg.nplayers as usize
+    }
+
+    async fn handle_clireq(&mut self, pid: srvcli::PlayerId, climsg: srvcli::ClientMsg) {
+        match self.state {
+            State::InLobby => match climsg {
+                srvcli::ClientMsg::InLobby(srvcli::LobbyReq::StartGame) => {
+                    if !self.is_player_admin(pid) {
+                        log::error!("Non-admin player attempted to start game");
+                        return;
+                    }
+
+                    if !self.players_ready() {
+                        log::error!("admin attempted to start game but players are not ready");
+                        return;
+                    }
+
+                    self.state = State::InGame;
+                    self.send_info_to_players().await;
+                }
+            },
+
+            _ => unimplemented!(),
+        }
+    }
+
+    async fn task_init(&mut self, rep_tx: oneshot::Sender<srvcli::CreateRep>) {
         // initialization: create the first player and send ther reply
         let game_id  = self.gid.to_string();
-        let reply = common::CreateRep { game_id: game_id };
+        let reply = srvcli::CreateRep { game_id: game_id };
 
         if let Err(x) = rep_tx.send(reply) {
             eprintln!("Error sending CreateRep reply: {:?}", x);
@@ -168,7 +233,7 @@ pub fn spawn_game_task(
     gid: GameId,
     cfg: GameConfig,
     dir_tx: DirTaskTx,
-    rep_tx: oneshot::Sender<common::CreateRep>,
+    rep_tx: oneshot::Sender<srvcli::CreateRep>,
 ) -> GameTaskTx {
     let (game_tx, game_rx) = mpsc::channel::<GameReq>(1024);
     let game = Game::new(gid, cfg, game_rx, dir_tx);

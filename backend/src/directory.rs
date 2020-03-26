@@ -8,6 +8,7 @@ use std::collections::HashMap;
 use std::collections::hash_map::Entry;
 use tokio::sync::oneshot;
 
+use core::srvcli;
 use crate::{
     game::{GameId, GameConfig, spawn_game_task},
     game_task::{GameTaskTx},
@@ -37,7 +38,7 @@ impl Directory {
     // create a new game:
     //  - add an entry to the directory
     //  - spawn a task for the game with a mpsc channel, and keep the tx end in the table
-    pub fn new_game(&mut self, cfg: GameConfig, rep_tx: oneshot::Sender<common::CreateRep>) {
+    pub fn new_game(&mut self, cfg: GameConfig, rep_tx: oneshot::Sender<srvcli::CreateRep>) {
         loop {
             let gid = GameId::new_random();
             match self.ht.entry(gid) {

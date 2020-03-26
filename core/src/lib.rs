@@ -14,6 +14,7 @@ pub mod error;
 pub mod card;
 pub mod deck;
 pub mod game;
+pub mod srvcli;
 
 pub use game::{Game, GameVer, HandCardIdx, PlayerGameView, PlayerAction, TableEntry};
 pub use card::{Card, Rank, Suit};

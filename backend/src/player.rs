@@ -8,9 +8,11 @@
 use warp::http::StatusCode;
 use warp::filters::ws;
 
-use crate::game;
+use core::srvcli;
+
 use crate::game_task::{GameReq, GameTaskTx};
 use crate::player_task::{PlayerTaskMsg, PlayerTaskMsg::{RegistrationResult, ForwardToClient}};
+
 
 use futures::{SinkExt,StreamExt};
 
@@ -23,7 +25,7 @@ pub async fn player_setup(
     let (player_tx, mut player_rx) = tokio::sync::mpsc::channel::<PlayerTaskMsg>(1024);
 
     // register player and get player info from the game task
-    let pid: game::PlayerId = {
+    let pid: srvcli::PlayerId = {
         let req = GameReq::RegisterPlayer(player_tx, player_name);
         if let Err(x) = game_tx.send(req).await {
             log::error!("Error sending RegisterPlayer request: {:?}", x);
@@ -43,14 +45,35 @@ pub async fn player_setup(
     // Here we define what will happen at a later point in time (when the protocol upgrade happens)
     // and we return rep which is a reply that will execute the upgrade and spawn a task with our
     // closure.
-    let rep = ws.on_upgrade(|websocket| async move {
+    let rep = ws.on_upgrade(move |websocket| async move {
+        let self_pid = pid.clone();
         let (mut ws_tx, mut ws_rx) = websocket.split();
         // We either:
         // receive requests from the game tasj and send them to the client
         // receive requests from the client and send them to the game task
         loop {
             tokio::select! {
-                cli_req = ws_rx.next() => unimplemented!(),
+                // message from client
+                cli_req = ws_rx.next() => {
+                    match cli_req {
+                        None => log::error!("Empty message from client websocket"),
+                        Some(Err(x)) => {
+                            log::error!("Error in client websocket");
+                            unimplemented!()
+                        },
+                        Some(Ok(climsg)) => {
+                            let req_s = climsg.to_str().unwrap();
+                            log::info!("Received message: {:?}", req_s);
+                            let cli_req: srvcli::ClientMsg = serde_json::from_str(&req_s).unwrap();
+                            let req = GameReq::ClientReq(self_pid, cli_req);
+                            if let Err(x) = game_tx.send(req).await {
+                                log::error!("Error forwarding client request: {:?}", x);
+                                unimplemented!();
+                            }
+                        }
+                    }
+                }
+
                 // message from game task
                 game_req = player_rx.next() => {
                     match game_req {
@@ -66,8 +89,9 @@ pub async fn player_setup(
                         None => {
                             log::error!("Received None from game task")
                         },
-                    };
+                    }
                 },
+
                 else => break,
             };
         }
