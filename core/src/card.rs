@@ -31,7 +31,7 @@ pub struct Card {
     pub rank: Rank,
 }
 
-#[derive(PartialEq,Eq, Copy, Clone)]
+#[derive(PartialEq,Eq, Copy, Clone, Serialize, Deserialize)]
 pub struct CardClone {
     pub suit: Suit,
     pub rank: Rank,
@@ -99,6 +99,12 @@ impl Card {
             suit: self.suit,
             rank: self.rank,
         }
+    }
+}
+
+impl CardClone {
+    pub fn is_card(&self, card: &Card) -> bool {
+        return self.suit == card.suit && self.rank == card.rank
     }
 }
 

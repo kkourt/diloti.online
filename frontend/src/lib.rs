@@ -9,13 +9,14 @@ extern crate wasm_bindgen;
 extern crate serde_json;
 extern crate url;
 
+use std::convert::From;
 use seed::{*, prelude::*};
 use wasm_bindgen::JsCast;
 
 use core;
 
 use core::srvcli;
-use core::srvcli::{CreateReq, CreateRep, LobbyInfo, ClientMsg, LobbyReq, ServerMsg, PlayerId};
+use core::srvcli::{CreateReq, CreateRep, LobbyInfo, ClientMsg, ServerMsg, PlayerId};
 
 type XRng = rand_pcg::Pcg64;
 
@@ -358,7 +359,7 @@ impl LobbySt {
     fn update_state(&mut self, msg: &LobbyMsg, _orders: &mut impl Orders<Msg>) -> Option<Model> {
         match msg {
             LobbyMsg::IssueStart => {
-                let req = serde_json::to_string(&ClientMsg::InLobby(LobbyReq::StartGame)).unwrap();
+                let req = serde_json::to_string(&ClientMsg::StartGame).unwrap();
                 if let Err(x) = self.wsocket.ws.send_with_str(&req) {
                     error!("Failed to send data to server");
                     unimplemented!();
@@ -384,7 +385,7 @@ impl LobbySt {
                 let srv_msg: ServerMsg = serde_json::from_str(&txt).unwrap();
                 self.lobby_info = Some(match srv_msg {
                     ServerMsg::InLobby(x) => x,
-                    ServerMsg::InGame(srvcli::GameInfo(pview)) => {
+                    ServerMsg::GameUpdate(pview) => {
                         let lobby_info : &LobbyInfo = self.lobby_info
                             .as_ref()
                             .expect("At this point, we should have received lobby info from the server");
@@ -456,20 +457,38 @@ impl LobbySt {
 struct TableSelection {
     curent: Vec<usize>,
     existing: Vec<Vec<usize>>,
-    ver: core::GameVer,
 }
 
 enum TurnProgress {
-    Nothing,
-    CardSelected(core::HandCardIdx),
-    DeclaringWith(core::HandCardIdx, TableSelection),
-    GatheringWith(core::HandCardIdx, TableSelection),
+    Nothing(String),
+    CardSelected(usize),
+    DeclaringWith(usize, TableSelection),
+    GatheringWith(usize, TableSelection),
     ActionIssued(core::PlayerAction),
 }
 
 enum GamePhase {
     MyTurn(TurnProgress),
     OthersTurn(PlayerId),
+}
+
+impl From<(&LobbyInfo, &core::PlayerGameView)> for GamePhase {
+    fn from(pieces: (&LobbyInfo, &core::PlayerGameView)) -> GamePhase {
+        let (lobby_info, pview) = pieces;
+        let turn_tpos = pview.turn;
+        let self_tpos = lobby_info.players[lobby_info.self_id.0].tpos;
+        if self_tpos == turn_tpos {
+            GamePhase::MyTurn(TurnProgress::Nothing("Your turn to play".into()))
+        } else {
+            let turn_pid = lobby_info.players
+                .iter()
+                .enumerate()
+                .find( |(_, pi)| pi.tpos == turn_tpos)
+                .map( |(i,_)| i)
+                .unwrap();
+            GamePhase::OthersTurn(srvcli::PlayerId(turn_pid))
+        }
+    }
 }
 
 struct GameSt {
@@ -479,36 +498,6 @@ struct GameSt {
 
     wsocket: std::rc::Rc<Wsocket>,
 }
-
-impl GameSt {
-    pub fn new(lobbyst: &LobbySt, pview: core::PlayerGameView) -> GameSt {
-        let lobby_info = lobbyst.lobby_info.as_ref().unwrap();
-        let phase = {
-            let turn_tpos = pview.turn;
-            let self_tpos = lobby_info.players[lobby_info.self_id.0].tpos;
-            if self_tpos == turn_tpos {
-                GamePhase::MyTurn(TurnProgress::Nothing)
-            } else {
-                let turn_pid = lobby_info.players
-                    .iter()
-                    .enumerate()
-                    .find( |(_, pi)| pi.tpos == turn_tpos)
-                    .map( |(i,_)| i)
-                    .unwrap();
-                GamePhase::OthersTurn(srvcli::PlayerId(turn_pid))
-            }
-        };
-
-        GameSt {
-            view: pview,
-            phase: phase,
-            lobby_info: lobby_info.clone(),
-            wsocket: lobbyst.wsocket.clone(),
-        }
-    }
-}
-
-
 
 impl Default for Model {
     fn default() -> Self {
@@ -528,35 +517,128 @@ impl Default for Model {
 
 #[derive(Clone,Debug)]
 enum InGameMsg {
-    ClickHandCard(core::HandCardIdx),
-    PutDown(core::HandCardIdx),
-    TakeWith(core::HandCardIdx),
-    DeclareWith(core::HandCardIdx),
+    ClickHandCard(usize),
+    LayDown(usize),
+    TakeWith(usize),
+    DeclareWith(usize),
 }
 
 
 impl GameSt {
+
+
+    pub fn new(lobbyst: &LobbySt, pview: core::PlayerGameView) -> GameSt {
+        let lobby_info = lobbyst.lobby_info.as_ref().unwrap();
+        let phase: GamePhase = (lobby_info, &pview).into();
+        GameSt {
+            view: pview,
+            phase: phase,
+            lobby_info: lobby_info.clone(),
+            wsocket: lobbyst.wsocket.clone(),
+        }
+    }
+
+    pub fn new_view_from_server(&mut self, pview: core::PlayerGameView) {
+        self.view = pview;
+        self.phase = (&self.lobby_info, &self.view).into();
+    }
+
+    fn action_issued(&self) -> bool {
+        match self.phase {
+            GamePhase::MyTurn(TurnProgress::ActionIssued(_)) => true,
+            _ => false,
+        }
+    }
+
+    fn myturn(&self) -> bool {
+        match self.phase {
+            GamePhase::MyTurn(_) => true,
+            _ => false,
+        }
+    }
+
+    fn invalid_action(&mut self, err: String) {
+        assert!(self.myturn());
+        // reset phase
+        let user_msg = format!("Invalid play: {}. Still your turn!", err);
+        self.phase = GamePhase::MyTurn(TurnProgress::Nothing(user_msg));
+    }
+
+    fn try_issue_action(&mut self, act: core::PlayerAction) -> Result<(), ()> {
+        log(format!("Issuing action: {:?}", act));
+        let valid_check = self.view.validate_action(&act);
+        let invalid_msg = match valid_check {
+            Ok(()) => {
+                let climsg = ClientMsg::PlayerAction(act.clone());
+                let req = serde_json::to_string(&climsg).unwrap();
+                if let Err(x) = self.wsocket.ws.send_with_str(&req) {
+                    error!("Failed to send data to server");
+                    unimplemented!();
+                }
+                self.phase = GamePhase::MyTurn(TurnProgress::ActionIssued(act));
+                return Ok(())
+            }
+            Err(x) => x,
+        };
+
+        self.invalid_action(invalid_msg);
+        Err(())
+    }
+
     fn update_state(&mut self, msg: &InGameMsg) -> Option<Model> {
         match msg {
             InGameMsg::ClickHandCard(x) => {
                 self.phase = GamePhase::MyTurn(TurnProgress::CardSelected(*x));
+                return None;
             }
 
-            InGameMsg::PutDown(x) => {
-                let action = core::PlayerAction::Play(*x);
-                self.issue_action(&action);
-                self.phase = GamePhase::MyTurn(TurnProgress::ActionIssued(action));
+            // User selected a card to lay down
+            InGameMsg::LayDown(cidx) => {
+                let cc = self.view.own_hand.cards[*cidx].get_clone();
+                let action = core::PlayerAction::LayDown(cc);
+                match self.try_issue_action(action) {
+                    Err(()) => (),
+                    Ok(()) => (),
+                };
+                return None;
             }
 
             _ => unimplemented!(),
         }
-
-        None
     }
 
-    fn issue_action(&self, act: &core::PlayerAction) {
-        // TODO
-        log(format!("Issuing action: {:?}", act));
+    fn handle_server_message(&mut self, msg: ServerMsg) -> Option<Model> {
+        match msg {
+            ServerMsg::InvalidAction(x) => {
+                assert!(self.action_issued());
+                self.invalid_action(x);
+                return None
+            },
+
+            ServerMsg::GameUpdate(pview) => {
+                self.new_view_from_server(pview);
+                return None;
+            },
+
+            _ => unimplemented!()
+        }
+    }
+
+    fn handle_ws_event(&mut self, ev: &WsEvent, _orders: &mut impl Orders<Msg>) -> Option<Model> {
+        match (ev, self.wsocket.ws_state) {
+            (WsEvent::WsConnected(jv), _) => unimplemented!(),
+            (WsEvent::WsMessage(msg), WsState::Ready) => {
+                let txt = msg.data().as_string().expect("No data in server message");
+                log(format!("Received message {:?}", txt));
+                let srv_msg: ServerMsg = serde_json::from_str(&txt).unwrap();
+                self.handle_server_message(srv_msg)
+            },
+            // TODO: have some kind of error model... (or reconnect?)
+            // (WsEvent::WsClose(_), _) => _,
+            _ => panic!("Invalid websocket state/message ({:?}/{:?})", ev, self.wsocket.ws_state)
+        };
+
+        None
     }
 
     fn mk_card_div(&self, card: &core::Card) -> Node<Msg> {
@@ -586,7 +668,7 @@ impl GameSt {
 
         let table = {
             let mut entries: Vec<Node<Msg>> = vec![];
-            for (_eidx, entry) in self.view.iter_table_entries() {
+            for entry in self.view.iter_table_entries() {
                 let e = self.mk_table_entry_div(entry);
                 entries.push(e)
             }
@@ -599,7 +681,7 @@ impl GameSt {
 
         let hand = {
             let mut cards: Vec<Node<Msg>> = vec![];
-            for (cidx, card) in self.view.iter_hand_cards() {
+            for (cidx, card) in self.view.iter_hand_cards().enumerate() {
                 let mut c_div = self.mk_card_div(card);
                 c_div.add_listener(
                     simple_ev(Ev::Click, Msg::InGame(InGameMsg::ClickHandCard(cidx)))
@@ -614,11 +696,11 @@ impl GameSt {
             ]
         };
 
-        let msg = match self.phase {
+        let msg = match &self.phase {
             GamePhase::OthersTurn(_) => p!["Waiting for other player's turn"],
-            GamePhase::MyTurn(TurnProgress::Nothing) => p!["Your turn! Select the card you want to play"],
-            GamePhase::MyTurn(TurnProgress::CardSelected(c)) => {
-                    let card = self.view.get_hand_card(&c);
+            GamePhase::MyTurn(TurnProgress::Nothing(msg)) => p![msg],
+            GamePhase::MyTurn(TurnProgress::CardSelected(cidx)) => {
+                    let card = &self.view.own_hand.cards[*cidx];
 
                     let span : Node<Msg> = if card.suit.is_red() {
                         span![ style!{"color" => "red"}, format!("{}", card) ]
@@ -628,21 +710,21 @@ impl GameSt {
 
                     let mut div = div![];
                     {
-                        let msg = InGameMsg::PutDown(c);
+                        let msg = InGameMsg::LayDown(*cidx);
                         div.add_child(
                             button![ simple_ev(Ev::Click, Msg::InGame(msg)), "Play ", span.clone()]
                         );
                     }
 
                     {
-                        let msg = InGameMsg::TakeWith(c);
+                        let msg = InGameMsg::TakeWith(*cidx);
                         div.add_child(
                             button![ simple_ev(Ev::Click, Msg::InGame(msg)), "Take with ", span.clone()]
                         );
                     }
 
                     if !card.rank.is_figure() {
-                        let msg = InGameMsg::DeclareWith(c);
+                        let msg = InGameMsg::DeclareWith(*cidx);
                         div.add_child(
                             button![ simple_ev(Ev::Click, Msg::InGame(msg)), "Declare with ", span]
                         );
@@ -650,7 +732,9 @@ impl GameSt {
 
                     div
             }
-            _ => panic!(""),
+            GamePhase::MyTurn(TurnProgress::DeclaringWith(cidx, tsel)) => unimplemented!(),
+            GamePhase::MyTurn(TurnProgress::GatheringWith(cidx, tsel)) => unimplemented!(),
+            GamePhase::MyTurn(TurnProgress::ActionIssued(a)) => p!["Issued action. Waiting for server."],
         };
 
         div![ table, hand, msg]
@@ -708,6 +792,7 @@ fn update(msg: Msg, mut model: &mut Model, orders: &mut impl Orders<Msg>) {
         (&mut Model::InLobby(st), Msg::Lobby(ref msg)) => st.update_state(msg, orders),
         (&mut Model::InLobby(st), Msg::Ws(ref msg))    => st.handle_ws_event(msg, orders),
         (&mut Model::InGame(st), Msg::InGame(ref msg)) => st.update_state(msg),
+        (&mut Model::InGame(st), Msg::Ws(ref msg))    => st.handle_ws_event(msg, orders),
         _ => panic!("Invalid message for current state"),
     };
 

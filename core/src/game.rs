@@ -5,7 +5,7 @@
 //
 
 use super::deck::Deck;
-use super::card::Card;
+use super::card::{Card, CardClone};
 
 use serde::{Deserialize, Serialize};
 
@@ -17,29 +17,30 @@ use serde::{Deserialize, Serialize};
 // "lost" when the game is played. The state of each card is implicit in which container it is
 // stored in.
 
-// NB: User messages and actions need to refer to objects in the game state (e.g., cards)
-// I use indices in the game state array together with a version number as a sanity check.
-#[derive(Copy, Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]
-pub struct GameVer(u64);
-
-#[derive(Copy, Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]
-pub struct HandCardIdx(usize, GameVer);
-
-#[derive(Copy, Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]
-pub struct TableEntryIdx(usize, GameVer);
-
-pub struct Player {
-    pub hand: Deck,
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum PlayerAction {
+    LayDown(CardClone),
+    DeclareWith, /* TODO */
+    TakeWith, /* TODO */
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InvalidAction {
+    action: PlayerAction,
+    reason: String,
+}
+
+
+/// Player identifier based on its position on the table
 #[derive(Copy, Clone, PartialEq, Eq, Serialize, Deserialize, Debug)]
 pub struct PlayerTpos(pub u8);
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Declaration {
+    /// groups of cards
     cards: Vec<Vec<Card>>,
+    /// Last player that made this declaration
     player: PlayerTpos,
-    sum: u8,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -53,28 +54,21 @@ pub struct  Table {
     pub entries: Vec<TableEntry>,
 }
 
+struct Player {
+    pub hand: Deck,
+}
+
+
 pub struct Game<R: rand::Rng> {
-    pub table: Table,
-    pub main_deck: Deck,
-    pub players: Vec<Player>,
+    table: Table,
+    main_deck: Deck,
+    players: Vec<Player>,
 
     pub turn: PlayerTpos,
 
     rng: R,
-    ver: GameVer,
 }
 
-#[derive(Debug)]
-pub enum PlayerAction {
-    Play(HandCardIdx),
-    DeclareWith,
-    TakeWith,
-}
-
-pub struct InvalidAction {
-    action: PlayerAction,
-    reason: String,
-}
 
 /// This a player's point of view of the game
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -82,15 +76,10 @@ pub struct PlayerGameView {
     pub pid: PlayerTpos,
     pub table: Table,
     pub own_hand: Deck,
-    pub ver: GameVer,
     pub turn: PlayerTpos,
 
     pub main_deck_sz: usize,
     pub player_decks_sz: Vec<usize>,
-}
-
-pub struct PlayerTurn {
-    pub game_view: PlayerGameView,
 }
 
 // Some terminology:
@@ -119,8 +108,7 @@ impl<R: rand::Rng> Game<R> {
     }
 
 
-    fn init(nplayers: usize, rng: R) -> Game<R>
-    {
+    fn init(nplayers: usize, rng: R) -> Game<R> {
         assert!(nplayers == 2 || nplayers == 4);
 
         let deck = Deck::full_52();
@@ -131,7 +119,6 @@ impl<R: rand::Rng> Game<R> {
             players: (0..nplayers).map( |_i| Player { hand: Deck::empty() } ).collect(),
             turn: PlayerTpos(0),
             rng: rng,
-            ver: GameVer(0),
         };
 
         game.deal();
@@ -158,12 +145,25 @@ impl<R: rand::Rng> Game<R> {
 
     }
 
+    fn get_player(&self, tpos: PlayerTpos) -> Option<&Player> {
+        self.players.get(tpos.0 as usize)
+    }
+
+    fn get_player_mut(&mut self, tpos: PlayerTpos) -> Option<&mut Player> {
+        self.players.get_mut(tpos.0 as usize)
+    }
+
+    pub fn remove_player_card(&mut self, tpos:  PlayerTpos, cc: CardClone) -> Option<Card> {
+        let player : &mut Player = self.get_player_mut(tpos)?;
+        let pos = player.iter_hand_cards().position(|x| cc.is_card(x) )?;
+        Some(player.hand.cards.remove(pos))
+    }
+
     pub fn get_player_game_view(&self, pid: PlayerTpos) -> PlayerGameView {
         PlayerGameView {
             pid: pid,
             table: self.table.clone(),
             own_hand: self.players[pid.0 as usize].hand.clone(),
-            ver: self.ver,
             turn: self.turn,
 
             main_deck_sz: self.main_deck.ncards(),
@@ -171,45 +171,82 @@ impl<R: rand::Rng> Game<R> {
         }
     }
 
-    pub fn start_player_turn(&self) -> PlayerTurn {
-        let pid = self.turn;
-        PlayerTurn {
-            game_view: self.get_player_game_view(pid),
+    fn next_turn(&mut self) {
+        let nplayers = self.players.len() as u8;
+        self.turn = PlayerTpos( (self.turn.0 + 1) % nplayers);
+    }
+
+    pub fn apply_action(&mut self, tpos: PlayerTpos, action: &PlayerAction) -> Result<(), String> {
+        self.get_player_game_view(tpos).validate_action(action)?;
+        match action {
+            PlayerAction::LayDown(cc) => {
+                let card = self.remove_player_card(tpos, *cc).ok_or_else(|| "Card does not exist")?;
+                self.table.entries.push(TableEntry::Card(card));
+            },
+            _ => unimplemented!(),
         }
+        self.next_turn();
+        Ok(())
     }
+}
 
-    pub fn  end_player_turn(&self, turn: PlayerTurn, action: PlayerAction) -> Result<GameState, InvalidAction> {
-        unimplemented!()
+impl Player {
+    pub fn iter_hand_cards(&self) -> impl Iterator<Item=&Card> {
+        self.hand.cards.iter()
     }
-
 }
 
 impl PlayerGameView {
 
-    pub fn get_hand_card(&self, cidx: &HandCardIdx) -> &Card {
-        let HandCardIdx(idx, ver) = cidx;
-        if *ver != self.ver {
-            panic!("mismatching versions: {:?} vs {:?}", ver, self.ver);
+    pub fn iter_hand_cards(&self) -> impl Iterator<Item=&Card> {
+        self.own_hand.cards.iter()
+    }
+
+    pub fn iter_table_entries(&self) -> impl Iterator<Item=&TableEntry> {
+        self.table.entries.iter()
+    }
+
+    pub fn card_in_hand(&self, cc: CardClone) -> bool {
+        self.iter_hand_cards().find(|c| c.rank == cc.rank && c.suit == cc.suit).is_some()
+    }
+
+    pub fn is_lay_down_valid(&self, cc: CardClone) -> Result<(), String> {
+        // RULE: you are not allow to lay down a figure card, if the same figure already exists on
+        // the table.
+        if cc.rank.is_figure() {
+            let matching_figure : Option<&Card> = self.table.entries.iter().find_map(|te| {
+                match te {
+                    TableEntry::Card(c) => if c.rank == cc.rank { Some(c) } else { None },
+                    TableEntry::Decl(_) => None,
+                }
+            });
+
+            match matching_figure {
+                Some(c) => return Err(format!("You cannot lay down a figure card ({}) if the same ({}) exists on the table. You have to take it!", cc, c)),
+                _ => (),
+            }
         }
-        &self.own_hand.cards[*idx]
+
+        Ok(())
     }
 
-    pub fn iter_hand_cards(&self) -> impl Iterator<Item=(HandCardIdx, &Card)> {
-        let ver = self.ver;
-        self.own_hand.cards
-            .iter()
-            .enumerate()
-            .map(move |(i,c)| (HandCardIdx(i, ver), c))
+    pub fn is_my_turn(&self) -> bool {
+        return self.turn == self.pid;
     }
 
-    pub fn iter_table_entries(&self) -> impl Iterator<Item=(TableEntryIdx, &TableEntry)> {
-        let ver = self.ver;
-        self.table.entries
-            .iter()
-            .enumerate()
-            .map(move |(i,e)| (TableEntryIdx(i, ver), e))
-    }
+    // NB: we put all validation logic here so that clients that only have this object can perform
+    // it.
+    pub fn validate_action(&self, action: &PlayerAction) -> Result<(), String> {
+        // TODO: verify version once
+        if !self.is_my_turn() {
+            return Err("Not this player's turn".into());
+        }
 
+        match action {
+            PlayerAction::LayDown(cc) => self.is_lay_down_valid(*cc),
+            _ => unimplemented!(),
+        }
+    }
 }
 
 impl std::fmt::Display for PlayerTpos {
@@ -232,4 +269,8 @@ impl std::fmt::Display for Table {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         f.debug_list().entries(self.entries.iter()).finish()
     }
+}
+
+#[test]
+fn pv_validation_tests() {
 }

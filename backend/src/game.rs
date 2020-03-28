@@ -113,38 +113,45 @@ impl Game {
     fn get_player_mut(&mut self, pid: srvcli::PlayerId) -> &mut Player {
         self.players.get_mut(pid.0).unwrap()
     }
+
+    pub async fn send_msg_to_pid(&mut self, pid: srvcli::PlayerId, srvmsg: srvcli::ServerMsg) {
+        let player = self.get_player_mut(pid);
+        let msg = PlayerTaskMsg::ForwardToClient(srvmsg);
+        if let Err(x) = player.tx.send(msg).await {
+            eprintln!("Error sending msg to player {:?}", x);
+            // TODO: remove player or retry
+            unimplemented!();
+        }
+    }
+
+    pub fn iter_player_ids(&self) -> impl Iterator<Item=srvcli::PlayerId> {
+        (0..self.players.len()).map(|i| srvcli::PlayerId(i))
+    }
+
     pub async fn send_info_to_players(&mut self) {
         match self.state {
             State::InLobby => {
                 let players : Vec<srvcli::PlayerInfo>
                     = self.players.iter().map(|x: &Player| x.player_info.clone()).collect();
-                for pid in 0..self.players.len() {
-                    let player = &mut self.players[pid];
-                    let climsg = srvcli::ServerMsg::InLobby(srvcli::LobbyInfo {
+
+                for pid in self.iter_player_ids() {
+                    let player = self.get_player_mut(pid);
+                    let srvmsg = srvcli::ServerMsg::InLobby(srvcli::LobbyInfo {
                         nplayers: self.cfg.nplayers,
                         players: players.clone(),
-                        self_id: srvcli::PlayerId(pid),
+                        self_id: pid,
                     });
-                    let msg = PlayerTaskMsg::ForwardToClient(climsg);
-                    if let Err(x) = player.tx.send(msg).await {
-                        eprintln!("Error sending msg to player {:?}", x);
-                        // TODO: remove player or retry
-                        unimplemented!();
-                    }
+                    self.send_msg_to_pid(pid, srvmsg).await;
                 }
             },
 
             State::InGame => {
-                for player in self.players.iter_mut() {
-                    let tpos = player.player_info.tpos;
+                for i in 0..self.players.len() {
+                    let pid = srvcli::PlayerId(i);
+                    let tpos = self.get_player(pid).player_info.tpos;
                     let player_view = self.curr_game.get_player_game_view(tpos);
-                    let climsg = srvcli::ServerMsg::InGame(srvcli::GameInfo(player_view));
-                    let msg = PlayerTaskMsg::ForwardToClient(climsg);
-                    if let Err(x) = player.tx.send(msg).await {
-                        eprintln!("Error sending msg to player {:?}", x);
-                        // TODO: remove player or retry
-                        unimplemented!();
-                    }
+                    let srvmsg = srvcli::ServerMsg::GameUpdate(player_view);
+                    self.send_msg_to_pid(pid, srvmsg).await;
                 }
             },
 
@@ -187,14 +194,23 @@ impl Game {
         self.get_player(pid).player_info.admin
     }
 
+    fn player_tpos(&self, pid: srvcli::PlayerId) -> srvcli::PlayerTpos {
+        self.get_player(pid).player_info.tpos
+    }
+
+    fn is_players_turn(&self, pid: srvcli::PlayerId) -> bool {
+        unimplemented!()
+    }
+
     fn players_ready(&self) -> bool {
         self.players.len() == self.cfg.nplayers as usize
     }
 
     async fn handle_clireq(&mut self, pid: srvcli::PlayerId, climsg: srvcli::ClientMsg) {
         match self.state {
+
             State::InLobby => match climsg {
-                srvcli::ClientMsg::InLobby(srvcli::LobbyReq::StartGame) => {
+                srvcli::ClientMsg::StartGame => {
                     if !self.is_player_admin(pid) {
                         log::error!("Non-admin player attempted to start game");
                         return;
@@ -208,7 +224,30 @@ impl Game {
                     self.state = State::InGame;
                     self.send_info_to_players().await;
                 }
+
+                srvcli::ClientMsg::PlayerAction(action) => unimplemented!(),
             },
+
+            State::InGame => match climsg {
+                srvcli::ClientMsg::StartGame => unimplemented!(),
+                srvcli::ClientMsg::PlayerAction(action) => {
+                    let tpos = self.player_tpos(pid);
+                    let pview = self.curr_game.get_player_game_view(tpos);
+                    let player = self.get_player_mut(pid);
+
+                    if let Err(errmsg) = pview.validate_action(&action) {
+                        let msg = srvcli::ServerMsg::InvalidAction(errmsg);
+                        self.send_msg_to_pid(pid, msg).await;
+                    } else {
+                        match self.curr_game.apply_action(tpos, &action) {
+                            Err(x) => unimplemented!(),
+                            Ok(()) => (),
+                        }
+                        self.send_info_to_players().await;
+                    }
+
+                }
+            }
 
             _ => unimplemented!(),
         }
@@ -221,7 +260,7 @@ impl Game {
 
         if let Err(x) = rep_tx.send(reply) {
             eprintln!("Error sending CreateRep reply: {:?}", x);
-            // TODO: self destruct or soemthing?
+            // TODO: self destruct or something?
             unimplemented!()
         }
     }

@@ -87,7 +87,8 @@ pub async fn player_setup(
                             log::error!("Received unexpected registration result: {:?}", x)
                         },
                         None => {
-                            log::error!("Received None from game task")
+                            log::error!("Received None from game task");
+                            panic!();
                         },
                     }
                 },
