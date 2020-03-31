@@ -68,7 +68,8 @@ fn rep_with_conflict<T: warp::Reply>(reply: T) -> warp::reply::WithStatus<T> {
 
 async fn create_game(req: srvcli::CreateReq, mut dir_tx: mpsc::Sender<directory_task::DirReq>)
 -> Result<impl warp::Reply, std::convert::Infallible> {
-    let cnf = game::GameConfig { nplayers: req.nplayers };
+
+    let cnf : game::GameConfig = req.into();
 
     // contact directory task to create a new game
     let (tx, rx) = oneshot::channel::<srvcli::CreateRep>();

@@ -22,10 +22,16 @@ type Rng = rand_pcg::Pcg64;
 
 pub use crate::chararr_id::GameId;
 
+#[derive(Debug, Clone)]
+pub struct GameDebug {
+    hand: Vec<core::Card>,
+    table: Vec<core::Card>,
+}
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct GameConfig {
     pub nplayers: u8,
+    pub debug: Option<GameDebug>,
 }
 
 struct Player {
@@ -48,21 +54,23 @@ struct Game {
     self_rx: GameTaskRx,
     dir_tx: DirTaskTx,
     gid: GameId,
-    cfg: GameConfig,
     state: State,
-
     curr_game: core::Game<Rng>,
+    nplayers: u8,
 }
 
 impl Game {
     pub fn new(gid: GameId, cfg: GameConfig, self_rx: GameTaskRx, dir_tx: DirTaskTx) -> Game {
 
         let rng = Rng::from_rng(rand::rngs::OsRng).expect("unable to initalize RNG");
-        let game = match cfg.nplayers {
-            1 => unimplemented!(),
-            2 => core::Game::new_2p(rng),
-            4 => core::Game::new_4p(rng),
-            _ => panic!("Incorrect number of players"),
+        let nplayers = cfg.nplayers;
+        let game = match (cfg.nplayers, cfg.debug) {
+            (1, None)       => core::Game::new_1p(rng),
+            (2, None)       => core::Game::new_2p(rng),
+            (4, None)       => core::Game::new_4p(rng),
+            (x, None)       => panic!("Incorrect number of players: {:?}", x),
+            (1, Some(dbg))  => core::Game::new_1p_debug(rng, dbg.table, dbg.hand),
+            (x, _)          => panic!("Debuging mode allowed only for single player (for now)."),
         };
 
         Game {
@@ -70,9 +78,9 @@ impl Game {
             players: vec![],
             self_rx: self_rx,
             dir_tx: dir_tx,
-            cfg: cfg,
             state: State::InLobby,
             curr_game: game,
+            nplayers: nplayers,
         }
     }
 
@@ -88,8 +96,8 @@ impl Game {
         let len = self.players.len();
 
         // no more players allowed
-        if len >= self.cfg.nplayers as usize {
-            assert_eq!(len, self.cfg.nplayers as usize);
+        if len >= self.nplayers as usize {
+            assert_eq!(len, self.nplayers as usize);
             return Err(String::from(format!("Game is already full ({} players)", len)));
         }
 
@@ -137,7 +145,7 @@ impl Game {
                 for pid in self.iter_player_ids() {
                     let player = self.get_player_mut(pid);
                     let srvmsg = srvcli::ServerMsg::InLobby(srvcli::LobbyInfo {
-                        nplayers: self.cfg.nplayers,
+                        nplayers: self.nplayers,
                         players: players.clone(),
                         self_id: pid,
                     });
@@ -203,7 +211,7 @@ impl Game {
     }
 
     fn players_ready(&self) -> bool {
-        self.players.len() == self.cfg.nplayers as usize
+        self.players.len() == self.nplayers as usize
     }
 
     async fn handle_clireq(&mut self, pid: srvcli::PlayerId, climsg: srvcli::ClientMsg) {
@@ -239,10 +247,12 @@ impl Game {
                         let msg = srvcli::ServerMsg::InvalidAction(errmsg);
                         self.send_msg_to_pid(pid, msg).await;
                     } else {
-                        match self.curr_game.apply_action(tpos, &action) {
-                            Err(x) => unimplemented!(),
-                            Ok(()) => (),
+                        let res = self.curr_game.apply_action(tpos, action);
+                        match res {
+                            Err(x) => unimplemented!(), // TODO: send error message to clients
+                            Ok(g) => self.curr_game = g,
                         }
+
                         self.send_info_to_players().await;
                     }
 
@@ -265,6 +275,27 @@ impl Game {
         }
     }
 
+}
+
+impl From<srvcli::CreateReq> for GameConfig {
+    fn from(req: srvcli::CreateReq) -> Self {
+        let debug_hand = req.get_debug_hand().map(|x| x.to_inner());
+        let debug_table = req.get_debug_table().map(|x| x.to_inner());
+        if debug_hand.is_none() || debug_table.is_none() {
+            return GameConfig {
+                nplayers: req.nplayers,
+                debug: None,
+            }
+        }
+
+        GameConfig {
+            nplayers: req.nplayers,
+            debug: Some(GameDebug {
+                hand: debug_hand.unwrap(),
+                table: debug_table.unwrap(),
+            }),
+        }
+    }
 }
 
 

@@ -13,4 +13,6 @@ pub enum Error {
     InvalidRankChar(char),
     /// Char -> Suit conversion failed (argument is given character)
     InvalidSuitChar(char),
+    /// str -> Card coversion failed (str has a different length than two)
+    InvalidStringLen,
 }

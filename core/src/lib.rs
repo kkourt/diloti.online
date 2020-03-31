@@ -16,6 +16,6 @@ pub mod deck;
 pub mod game;
 pub mod srvcli;
 
-pub use game::{Game, PlayerGameView, PlayerAction, TableEntry};
-pub use card::{Card, Rank, Suit, CardClone};
+pub use card::{Card, Rank, Suit};
 pub use deck::Deck;
+pub use game::{Game, PlayerGameView, PlayerAction, TableEntry, Declaration, DeclAction};

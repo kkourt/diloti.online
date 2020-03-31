@@ -9,7 +9,7 @@ use super::error as e;
 
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Suit {
     /// ♠
     Spade,
@@ -21,18 +21,12 @@ pub enum Suit {
     Diamond,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Rank(u8);
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct Rank(pub u8);
 
 /// Game card
-#[derive(PartialEq, Eq, Clone, Serialize, Deserialize)]
+#[derive(PartialEq, Eq, Clone, Hash, Serialize, Deserialize)]
 pub struct Card {
-    pub suit: Suit,
-    pub rank: Rank,
-}
-
-#[derive(PartialEq,Eq, Copy, Clone, Serialize, Deserialize)]
-pub struct CardClone {
     pub suit: Suit,
     pub rank: Rank,
 }
@@ -93,21 +87,6 @@ impl Suit {
     }
 }
 
-impl Card {
-    pub fn get_clone(&self) -> CardClone {
-        CardClone {
-            suit: self.suit,
-            rank: self.rank,
-        }
-    }
-}
-
-impl CardClone {
-    pub fn is_card(&self, card: &Card) -> bool {
-        return self.suit == card.suit && self.rank == card.rank
-    }
-}
-
 impl TryFrom<char> for Rank {
     type Error = e::Error;
 
@@ -154,6 +133,20 @@ impl TryFrom<[char; 2]> for Card {
     }
 }
 
+impl TryFrom<&str> for Card {
+    type Error = e::Error;
+
+    /// suit first
+    fn try_from(val: &str) -> Result<Card, e::Error> {
+        if val.len() != 2 {
+            return Err(e::Error::InvalidStringLen);
+        }
+        let suit = Suit::try_from(val.chars().nth(0).unwrap())?;
+        let rank = Rank::try_from(val.chars().nth(1).unwrap())?;
+        Ok(Card{suit: suit, rank: rank})
+    }
+}
+
 impl std::fmt::Display for Card {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         f.write_fmt(format_args!("{}{}", self.suit.to_symbol(), self.rank.to_symbol()))
@@ -161,18 +154,6 @@ impl std::fmt::Display for Card {
 }
 
 impl std::fmt::Debug for Card {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        f.write_fmt(format_args!("{}{}", self.suit.to_symbol(), self.rank.to_symbol()))
-    }
-}
-
-impl std::fmt::Display for CardClone {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        f.write_fmt(format_args!("{}{}", self.suit.to_symbol(), self.rank.to_symbol()))
-    }
-}
-
-impl std::fmt::Debug for CardClone {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         f.write_fmt(format_args!("{}{}", self.suit.to_symbol(), self.rank.to_symbol()))
     }

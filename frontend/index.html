@@ -12,6 +12,7 @@
     div {
       padding-bottom: 5px;
     }
+
     .card {
       display: inline-block;
       border: 2px solid;
@@ -20,23 +21,55 @@
       background-color: white;
       margin-right: 10px;
       margin-left: 10px;
+      margin-top: 20px;
       width: 60px;
       text-align: right;
       height:100px;
+      overflow: auto;
+      position: relative;
+    }
+
+    .error-msg {
+      color: red;
     }
 
     .red {
       color: red;
     }
 
+    .blue {
+      color: blue;
+    }
+
     .black {
       color: black;
     }
 
+    .card p {
+      margin: 0;
+    }
 
+  .card p.player {
+    position: absolute;
+    bottom: 0px;
+    font-size: 11px;
+  }
+
+  .card p.cards {
+    font-size: 12px;
+  }
+    /*
     .hand .card:hover {
       background-color: #EFF2FB;
+      transform: translate(0px, -10px);
     }
+    */
+
+    .hand .selected.card {
+      background-color: #ffe3b3;
+      transform: translate(0px, -10px);
+    }
+
 
     .hand {
       float: left;
@@ -52,9 +85,20 @@
       padding-bottom: 15px;
     }
 
+    .table .selected.card {
+      background-color: #ffe3b3;
+    }
+
+    /*
+    .table .card:hover {
+      background-color: #cccc00;
+    }
+    */
+
     .container {
       float: none;
-      height: 170px;
+      clear: both;
+      padding-top: 5px;
     }
     </style>
     <title>Δηλωτή online</title>

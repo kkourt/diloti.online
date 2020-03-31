@@ -9,18 +9,28 @@ extern crate wasm_bindgen;
 extern crate serde_json;
 extern crate url;
 
-use std::convert::From;
+use std::convert::{From, TryFrom};
 use seed::{*, prelude::*};
 use wasm_bindgen::JsCast;
 
 use core;
 
 use core::srvcli;
-use core::srvcli::{CreateReq, CreateRep, LobbyInfo, ClientMsg, ServerMsg, PlayerId};
+use core::srvcli::{CreateReq, CreateReqDebug, CreateRep, LobbyInfo, ClientMsg, ServerMsg, PlayerId};
 
 type XRng = rand_pcg::Pcg64;
 
-const DEFAULT_NR_PLAYERS: u8 = 2;
+const DEFAULT_NR_PLAYERS: u8 = 1;
+
+pub fn hand_from_string(s: &str) -> Option<core::Deck> {
+    let mut vec : Vec<core::Card> = vec![];
+    for cs in s.split_whitespace() {
+        let card = core::Card::try_from(cs).ok()?;
+        vec.push(card)
+    }
+
+    Some(core::Deck { cards: vec })
+}
 
 /// Initial state
 
@@ -30,6 +40,90 @@ enum InitMsg {
     StartGameReply(ResponseDataResult<CreateRep>),
     SetPlayerCount(String),
     SetPlayerName(String),
+    DebugHandCards(String),
+    DebugTableCards(String),
+}
+
+trait ToElem {
+    fn to_elem(&self) -> Node<Msg>;
+}
+
+impl ToElem for core::Card {
+    fn to_elem(&self) -> Node<Msg> {
+        let span = if self.suit.is_red() {
+            span![ style!{"color" => "red"}, format!("{}", self) ]
+        } else {
+            span![ style!{"color" => "black"}, format!("{}", self) ]
+        };
+
+        span
+    }
+}
+
+fn iter_to_elem<T: ToElem, I: Iterator<Item=T>>(start: &str, mut iter: I, end: &str) -> Node<Msg> {
+    let mut span = span![span![start]];
+        let i0 = iter.next();
+        if let Some(x0) = i0 {
+            span.add_child(x0.to_elem());
+            for x in iter {
+                span.add_child(span![" "]);
+                span.add_child(x.to_elem());
+            }
+        }
+        span.add_child(span![end]);
+        span
+}
+
+/*
+impl ToElem for core::Declaration {
+    fn to_elem(&self) -> Node<Msg> {
+        let mut span = span![]
+        let val = format!("⚐{}", self.value());
+        span.add_child(
+    }
+}
+*/
+
+impl ToElem for core::Deck {
+    fn to_elem(&self) -> Node<Msg> {
+        let mut span = span![span!["["]];
+        for (i,card) in self.cards.iter().enumerate() {
+            span.add_child(card.to_elem());
+            if i + 1 < self.cards.len() {
+                span.add_child(span![" "]);
+            }
+        }
+        span.add_child(span!["]"]);
+
+        span
+    }
+}
+
+impl ToElem for DeclareSelection {
+    fn to_elem(&self) -> Node<Msg> {
+        let mut span = span![];
+
+        if self.current.len() > 0 {
+            let curr = span![
+                // NB: Can we avoid the cloned here?
+                iter_to_elem("→", self.current.iter().cloned(), ""),
+                " "
+            ];
+            span.add_child(curr);
+        }
+
+        if self.action.card_groups.len() > 0 {
+            //span.add_child(span!["{"]);
+            for cardv in self.action.card_groups.iter() {
+                // NB: Can we avoid the cloned here?
+                let e = iter_to_elem(" (", cardv.iter().cloned(), ") ");
+                span.add_child(e);
+            }
+            //span.add_child(span!["}"]);
+        }
+
+        span
+    }
 }
 
 struct InitSt {
@@ -38,6 +132,9 @@ struct InitSt {
     /// Error when trying to start a game
     start_game_err: Option<String>,
     player_name: String,
+
+    debug_hand: String,
+    debug_table: String,
 }
 
 fn get_create_game_req_url() -> impl Into<std::borrow::Cow<'static, str>> {
@@ -45,6 +142,26 @@ fn get_create_game_req_url() -> impl Into<std::borrow::Cow<'static, str>> {
 }
 
 impl InitSt {
+
+    fn mk_create_req(&self) -> CreateReq {
+        let mut ret = CreateReq {
+            nplayers: self.nplayers,
+            debug: Some(CreateReqDebug {
+                hand_s: self.debug_hand.clone(),
+                table_s: self.debug_table.clone(),
+            }),
+        };
+
+        // verify that debug strings are correct
+        ret.verify_debug();
+
+        if let (Some(dbg), Some(storage)) = (&ret.debug, &seed::storage::get_storage()) {
+            seed::storage::store_data(&storage, "debug_hand_cards", &dbg.hand_s);
+            seed::storage::store_data(&storage, "debug_table_cards", &dbg.table_s);
+        }
+
+        ret
+    }
 
     fn update_state(&mut self, msg: &InitMsg, orders: &mut impl Orders<Msg>) -> Option<Model> {
         // log!(format!("*************** {:?}", msg));
@@ -82,7 +199,7 @@ impl InitSt {
                 }
 
                 let url = get_create_game_req_url();
-                let req_body = CreateReq { nplayers: self.nplayers };
+                let req_body = self.mk_create_req();
                 let req = Request::new(url.into())
                     .method(seed::browser::service::fetch::Method::Put)
                     .send_json(&req_body)
@@ -104,12 +221,28 @@ impl InitSt {
                 log!("SetPlayerName: {x}", x);
                 self.player_name = x.to_string();
             },
+
+            InitMsg::DebugHandCards(x) => {
+                self.debug_hand = x.clone();
+            },
+
+            InitMsg::DebugTableCards(x) => {
+                self.debug_table = x.clone();
+            },
         };
 
         None
     }
 
     fn select_nplayers(&self) -> Node<Msg> {
+        let get_option = |txt: &str, val: &str, selected| {
+            if selected {
+                option![txt, attrs!{At::Value => val, At::Selected => "true"} ]
+            } else {
+                option![txt, attrs!{At::Value => val,} ]
+            }
+        };
+
         let mut attrs = match self.nplayers {
             1 => attrs!{At::Value => "1"},
             2 => attrs!{At::Value => "2"},
@@ -117,17 +250,53 @@ impl InitSt {
             x => panic!("Invalid player count: {}", x),
         };
         attrs.add(At::Id, "sel-nplayers");
-        assert_eq!(DEFAULT_NR_PLAYERS, 2);
         div![
             label!["Number of players: ", attrs! {At::For => "sel-nplayers" }],
             select![
+                get_option("1 (debug)", "1", DEFAULT_NR_PLAYERS == 1),
+                get_option("2", "2", DEFAULT_NR_PLAYERS == 2),
+                get_option("4", "4", DEFAULT_NR_PLAYERS == 4),
+                input_ev(Ev::Input, |x| Msg::Init(InitMsg::SetPlayerCount(x))),
                 attrs,
-                option!["1 (debug)", attrs!{At::Value => "1"}],
-                option!["2", attrs!{At::Value => "2", At::Selected => "selected"}],
-                option!["4", attrs!{At::Value => "4"}],
-                input_ev(Ev::Input, |x| Msg::Init(InitMsg::SetPlayerCount(x)))
             ],
         ]
+    }
+
+    fn debug_options(&self) -> Node<Msg> {
+
+        let no_debug = self.debug_hand.len() == 0 && self.debug_table.len() == 0;
+        let debug_hand = core::Deck::try_from(self.debug_hand.as_str()).map_or(span![], |x| x.to_elem());
+        let debug_table = core::Deck::try_from(self.debug_table.as_str()).map_or(span![], |x| x.to_elem());
+
+        let mut div = div![
+            p!["Debug (use S,C,H,D for suit and 1-9,T,J,Q,K for rank; e.g.: HK C5)"],
+            p![
+                label!["Table cards: ", attrs!{At::For => "set-dbg-table" }],
+                input![
+                    input_ev(Ev::Input, |x| Msg::Init(InitMsg::DebugTableCards(x))),
+                    attrs!{
+                        At::Id => "set-dbg-table"
+                        At::Value => self.debug_table,
+                    }
+                ]
+            ],
+            p![
+                label!["Hand cards: ", attrs!{At::For => "set-dbg-hand" }],
+                input![
+                    input_ev(Ev::Input, |x| Msg::Init(InitMsg::DebugHandCards(x))),
+                    attrs!{
+                        At::Id => "set-dbg-hand"
+                        At::Value => self.debug_hand,
+                    },
+                ],
+            ],
+        ];
+
+        if !no_debug {
+            div.add_child(p![span!["Table: "], debug_table, span![", Hand: "], debug_hand]);
+        }
+
+        div
     }
 
     fn set_name(&self) -> Node<Msg> {
@@ -148,13 +317,19 @@ impl InitSt {
             h2!["Create new game"],
             self.set_name(),
             self.select_nplayers(),
+        ];
 
+        if self.nplayers == 1 {
+            ret.add_child(self.debug_options());
+        }
+
+        ret.add_child(
             button![
                 simple_ev(Ev::Click, Msg::Init(InitMsg::StartGame)),
                 "Start!",
                 style![St::MarginRight => px(10)],
             ],
-        ];
+        );
 
         if let Some(x) = &self.start_game_err {
             ret.add_child(span!["Failed! :-("]);
@@ -454,16 +629,117 @@ impl LobbySt {
 
 /// Game state
 
-struct TableSelection {
-    curent: Vec<usize>,
-    existing: Vec<Vec<usize>>,
+#[derive(Debug)]
+// NB: my understanding of the rules is that you cannot do arbitrary declarations using existing
+// declaratoins. You need to use plain cards.
+//
+struct DeclareSelection {
+    sum: u8,
+    current: Vec<core::Card>,
+    entries_set: std::collections::HashSet<core::TableEntry>,
+    action: core::DeclAction,
+}
+
+impl DeclareSelection {
+    pub fn new(hcard: &core::Card, sum: u8) -> Result<DeclareSelection, String> {
+        assert!(sum > 1 && sum <= 10);
+
+        let mut current = vec![];
+        let mut card_groups = vec![];
+
+        if hcard.rank.0 > sum {
+            return Err(format!("Rank of hand card {} is larger than the declaration sum {}", hcard.rank.0, sum));
+        } else if hcard.rank.0 == sum {
+            card_groups.push(vec![hcard.clone()]);
+        } else {
+            current.push(hcard.clone())
+        }
+
+        let ret = DeclareSelection {
+            sum: sum,
+            current: current,
+            entries_set: std::collections::HashSet::new(),
+            action: core::DeclAction {
+                hand_card: hcard.clone(),
+                card_groups: card_groups,
+                decl_groups: vec![],
+            }
+        };
+
+        Ok(ret)
+    }
+
+    pub fn reset(&mut self) {
+        *self = DeclareSelection::new(&self.action.hand_card, self.sum).unwrap();
+    }
+
+    pub fn is_ready(&self) -> bool {
+        if self.current.len() != 0 {
+            return false;
+        }
+
+        self.action.is_valid().is_ok()
+    }
+
+    pub fn add_table_entry(&mut self, tentry: &core::TableEntry) -> Result<(), String> {
+        let ret = self.do_add_table_entry(tentry);
+        if ret.is_ok() {
+            self.entries_set.insert(tentry.clone());
+        }
+
+        ret
+    }
+
+    fn do_add_table_entry(&mut self, tentry: &core::TableEntry) -> Result<(), String> {
+        match tentry {
+            core::TableEntry::Card(tcard) => {
+                let mut current_sum = self.current_sum();
+                current_sum += tcard.rank.0;
+                if current_sum > self.sum {
+                    return Err(format!("Cannot add {} to current declaration", tcard));
+                }
+                self.current.push(tcard.clone());
+                assert_eq!(current_sum, self.current_sum());
+                if current_sum == self.sum {
+                    let curr = self.current.drain(..).collect();
+                    self.action.card_groups.push(curr);
+                }
+                Ok(())
+            },
+            core::TableEntry::Decl(tdecl) => {
+                if tdecl.value() != self.sum {
+                    return Err(format!("Cannot add declared cards of value {} to current declaration with value {}", tdecl.value(), self.sum))
+                }
+                self.action.decl_groups.push(tdecl.clone());
+                Ok(())
+            }
+        }
+    }
+
+    pub fn is_tentry_selected(&self, tentry: &core::TableEntry) -> bool {
+        self.entries_set.contains(tentry)
+    }
+
+    fn current_sum(&self) -> u8 {
+        self.current.iter().fold(0, |acc, x| acc + x.rank.0)
+    }
+
+    pub fn make_decl_action(&self) -> core::DeclAction {
+        self.action.clone()
+    }
+
+    pub fn make_action(&self) -> core::PlayerAction {
+        core::PlayerAction::Declare(self.make_decl_action())
+    }
+
 }
 
 enum TurnProgress {
     Nothing(String),
     CardSelected(usize),
-    DeclaringWith(usize, TableSelection),
-    GatheringWith(usize, TableSelection),
+    DeclaringWith(usize, Option<DeclareSelection>),
+    RaisingWith(usize, Option<usize>),
+    GatheringWith(usize, DeclareSelection),
     ActionIssued(core::PlayerAction),
 }
 
@@ -472,13 +748,47 @@ enum GamePhase {
     OthersTurn(PlayerId),
 }
 
+impl GamePhase {
+    fn get_hand_selected_card(&self) -> Option<usize> {
+        use GamePhase::*;
+        use TurnProgress::*;
+
+        match self {
+            OthersTurn(_) => None,
+            MyTurn(Nothing(_)) => None,
+            MyTurn(CardSelected(x)) => Some(*x),
+            MyTurn(DeclaringWith(x,_)) => Some(*x),
+            MyTurn(RaisingWith(x,_)) => Some(*x),
+            MyTurn(GatheringWith(x,_)) => Some(*x),
+            MyTurn(ActionIssued(_)) => None,
+        }
+    }
+
+    fn is_tentry_selected(&self, tentry: &core::TableEntry) -> bool {
+        use GamePhase::*;
+        use TurnProgress::*;
+
+        match self {
+            OthersTurn(_) => false,
+            MyTurn(ActionIssued(_)) => false,
+            MyTurn(Nothing(_)) => false,
+            MyTurn(CardSelected(x)) => false,
+            MyTurn(DeclaringWith(x, None)) => false,
+            MyTurn(DeclaringWith(x, Some(ds))) => ds.is_tentry_selected(tentry),
+            // TODO
+            MyTurn(RaisingWith(x,_)) => unimplemented!(),
+            MyTurn(GatheringWith(x,_)) => unimplemented!(),
+        }
+    }
+}
+
 impl From<(&LobbyInfo, &core::PlayerGameView)> for GamePhase {
     fn from(pieces: (&LobbyInfo, &core::PlayerGameView)) -> GamePhase {
         let (lobby_info, pview) = pieces;
         let turn_tpos = pview.turn;
         let self_tpos = lobby_info.players[lobby_info.self_id.0].tpos;
         if self_tpos == turn_tpos {
-            GamePhase::MyTurn(TurnProgress::Nothing("Your turn to play".into()))
+            GamePhase::MyTurn(TurnProgress::Nothing("Your turn to play (select a card from your hand)".into()))
         } else {
             let turn_pid = lobby_info.players
                 .iter()
@@ -497,20 +807,29 @@ struct GameSt {
     lobby_info: LobbyInfo,
 
     wsocket: std::rc::Rc<Wsocket>,
+    tmp_error_msg: String,
+}
+
+pub fn get_string_from_storage(key: &str) -> String {
+    if let Some(storage) = seed::storage::get_storage() {
+        seed::storage::load_data(&storage, key)
+    } else {
+        None
+    }.unwrap_or("".to_string())
 }
 
 impl Default for Model {
     fn default() -> Self {
-        let player_name = if let Some(storage) = seed::storage::get_storage() {
-            seed::storage::load_data(&storage, "player_name")
-        } else {
-            None
-        }.unwrap_or("".to_string());
+        let player_name = get_string_from_storage("player_name");
+        let debug_hand = get_string_from_storage("debug_hand_cards");
+        let debug_table = get_string_from_storage("debug_table_cards");
 
         Self::Init(InitSt {
             nplayers: DEFAULT_NR_PLAYERS,
             start_game_err: None,
             player_name: player_name,
+            debug_hand: debug_hand,
+            debug_table: debug_table,
         })
     }
 }
@@ -518,9 +837,13 @@ impl Default for Model {
 #[derive(Clone,Debug)]
 enum InGameMsg {
     ClickHandCard(usize),
+    ClickTableEntry(usize),
     LayDown(usize),
+    DeclareWith(usize), // card index
+    RaiseWith(usize),   // card index
+    DeclareSetSum(u8),  // sum
     TakeWith(usize),
-    DeclareWith(usize),
+    FinalizePhase,
 }
 
 
@@ -535,6 +858,7 @@ impl GameSt {
             phase: phase,
             lobby_info: lobby_info.clone(),
             wsocket: lobbyst.wsocket.clone(),
+            tmp_error_msg: "".into(),
         }
     }
 
@@ -564,46 +888,157 @@ impl GameSt {
         self.phase = GamePhase::MyTurn(TurnProgress::Nothing(user_msg));
     }
 
-    fn try_issue_action(&mut self, act: core::PlayerAction) -> Result<(), ()> {
+    fn issue_action(&mut self, act: core::PlayerAction) {
+        let climsg = ClientMsg::PlayerAction(act.clone());
+        let req = serde_json::to_string(&climsg).unwrap();
+        if let Err(x) = self.wsocket.ws.send_with_str(&req) {
+            error!("Failed to send data to server");
+            unimplemented!();
+        }
+
+        self.phase = GamePhase::MyTurn(TurnProgress::ActionIssued(act));
+    }
+
+    fn issue_action_validate(&mut self, act: core::PlayerAction) {
         log(format!("Issuing action: {:?}", act));
         let valid_check = self.view.validate_action(&act);
         let invalid_msg = match valid_check {
             Ok(()) => {
-                let climsg = ClientMsg::PlayerAction(act.clone());
-                let req = serde_json::to_string(&climsg).unwrap();
-                if let Err(x) = self.wsocket.ws.send_with_str(&req) {
-                    error!("Failed to send data to server");
-                    unimplemented!();
-                }
-                self.phase = GamePhase::MyTurn(TurnProgress::ActionIssued(act));
-                return Ok(())
+                self.issue_action(act);
+                return
             }
             Err(x) => x,
         };
-
         self.invalid_action(invalid_msg);
-        Err(())
     }
 
     fn update_state(&mut self, msg: &InGameMsg) -> Option<Model> {
+        use GamePhase::*;
+        use TurnProgress::*;
+
+        self.tmp_error_msg = "".into();
         match msg {
             InGameMsg::ClickHandCard(x) => {
-                self.phase = GamePhase::MyTurn(TurnProgress::CardSelected(*x));
+                let new_phase = match self.phase {
+                    OthersTurn(_) => None,
+                    MyTurn(Nothing(_)) => Some(MyTurn(CardSelected(*x))),
+                    MyTurn(ActionIssued(_)) => None,
+
+                    // If a hand card is already selected, clicking it again, will reset phase
+                    // progress
+                    MyTurn(CardSelected(prev_x))    |
+                    MyTurn(DeclaringWith(prev_x,_)) |
+                    MyTurn(RaisingWith(prev_x,_))   |
+                    MyTurn(GatheringWith(prev_x,_)) => {
+
+                        // NB: this looks bad on mobile...
+                        /*
+                        if *x == prev_x {
+                            Some(MyTurn(Nothing("Select a card to play".into())))
+                        } else {
+                            Some(MyTurn(CardSelected(*x)))
+                        }
+                        */
+                        Some(MyTurn(CardSelected(*x)))
+                    },
+                };
+
+                if let Some(x) = new_phase {
+                    self.phase = x;
+                }
                 return None;
             }
+
+            InGameMsg::ClickTableEntry(eidx) => {
+                let te = self.view.get_table_entry(*eidx);
+                let is_selected = self.phase.is_tentry_selected(te);
+                let new_phase = match &mut self.phase {
+                    OthersTurn(_) => None,
+                    MyTurn(Nothing(_)) => None,
+                    MyTurn(ActionIssued(_)) => None,
+                    MyTurn(CardSelected(_)) => None,
+                    MyTurn(DeclaringWith(cidx, None)) => None,
+                    MyTurn(DeclaringWith(cidx, Some(ds))) => {
+                        if is_selected {
+                            // NB: we could do something smarter here
+                            ds.reset()
+                        } else {
+                            let res = ds.add_table_entry(te);
+                            if let Err(errstr) = res {
+                                self.tmp_error_msg = errstr;
+                            }
+                        }
+
+                        None
+                    },
+                    // TODO
+                    MyTurn(RaisingWith(prev_x,_))   => None,
+                    MyTurn(GatheringWith(prev_x,_)) => None,
+                };
+
+                if let Some(x) = new_phase {
+                    self.phase = x;
+                }
+                return None;
+            },
 
             // User selected a card to lay down
             InGameMsg::LayDown(cidx) => {
-                let cc = self.view.own_hand.cards[*cidx].get_clone();
+                let cc = self.view.own_hand.cards[*cidx].clone();
                 let action = core::PlayerAction::LayDown(cc);
-                match self.try_issue_action(action) {
-                    Err(()) => (),
-                    Ok(()) => (),
-                };
+                self.issue_action_validate(action);
                 return None;
-            }
+            },
+
+            InGameMsg::DeclareWith(cidx) => {
+                self.phase = GamePhase::MyTurn(TurnProgress::DeclaringWith(*cidx, None));
+                return None;
+            },
+
+            InGameMsg::RaiseWith(cidx) => {
+                self.phase = GamePhase::MyTurn(TurnProgress::RaisingWith(*cidx, None));
+                return None;
+            },
+
+
+            InGameMsg::DeclareSetSum(sum) => {
+                let cidx = match self.phase {
+                    GamePhase::MyTurn(TurnProgress::DeclaringWith(x, None)) => x,
+                    _ => unimplemented!(),
+                };
+
+                let card = &self.view.own_hand.cards[cidx];
+                let valid_sum = self.view.iter_hand_cards()
+                    .find(|c| *c != card && c.rank.0 == *sum)
+                    .is_some();
+
+                if !valid_sum {
+                    self.tmp_error_msg = format!("Declaration sum {} is invalid because you do not hold a matching card", sum);
+                    return None
+                }
+
+                match DeclareSelection::new(card, *sum) {
+                    Err(x) => self.tmp_error_msg = x,
+                    Ok(ts) => self.phase = GamePhase::MyTurn(TurnProgress::DeclaringWith(cidx, Some(ts))),
+                }
+
+                return None;
+            },
+
+            InGameMsg::FinalizePhase => {
+                match &self.phase {
+                    MyTurn(DeclaringWith(cidx, Some(ds))) => {
+                        let action = ds.make_action();
+                        self.issue_action(action);
+                        return None;
+                    },
+
+                    _ => unimplemented!(),
+                };
+            },
 
             _ => unimplemented!(),
+
         }
     }
 
@@ -641,25 +1076,76 @@ impl GameSt {
         None
     }
 
-    fn mk_card_div(&self, card: &core::Card) -> Node<Msg> {
-        let attr = if card.suit.is_red() {
-            let mut a = Attrs::empty();
-            a.add_multiple(At::Class, &["card", "red"]);
-            a
+    fn mk_table_card_div(&self, card: &core::Card, selected: bool) -> Node<Msg> {
+        let mut vec = vec!["card"];
+        if selected {
+            vec.push("selected");
+        }
+        if card.suit.is_red() {
+            vec.push("red")
         } else {
-            let mut a = Attrs::empty();
-            a.add_multiple(At::Class, &["card", "black"]);
-            a
+            vec.push("black")
         };
 
-        div![ attr, format!("{}", card)]
+        let mut attr = Attrs::empty();
+        attr.add_multiple(At::Class, &vec);
+        div![ attr, p![format!("{}", card)]]
     }
 
-    fn mk_table_entry_div(&self, te: &core::TableEntry) -> Node<Msg> {
-        match te {
-            core::TableEntry::Decl(x) => unimplemented!(),
-            core::TableEntry::Card(x) => self.mk_card_div(x),
+    fn mk_table_decl_div(&self, decl: &core::Declaration, selected: bool) -> Node<Msg> {
+        let mut vec = vec!["card", "blue"];
+        if selected {
+            vec.push("selected");
         }
+        let mut attr = Attrs::empty();
+        attr.add_multiple(At::Class, &vec);
+
+        let mut div = div![
+            attr,
+            //span![ style!{"color" => "blue"}, format!("{}", decl.value()) ],
+            p![format!("★{}", decl.value())],
+            //p!["blah"]
+        ];
+
+        for cardv in decl.cards.iter() {
+            // NB: Can we avoid the cloned here?
+            div.add_child(p![
+                attrs!{At::Class => "cards"},
+                iter_to_elem("", cardv.iter().cloned(), ""),
+            ]);
+        }
+        div.add_child(p![""]);
+        let pinfo = self.lobby_info.player_from_tpos(decl.player).unwrap();
+        div.add_child(p![
+           attrs!{At::Class => "player"},
+           &pinfo.name
+        ]);
+
+        div
+    }
+
+    fn mk_table_entry_div(&self, te: &core::TableEntry, selected: bool) -> Node<Msg> {
+        match te {
+            core::TableEntry::Decl(x) => self.mk_table_decl_div(x, selected),
+            core::TableEntry::Card(x) => self.mk_table_card_div(x, selected),
+        }
+    }
+
+    fn mk_hand_card_div(&self, card: &core::Card, selected: bool) -> Node<Msg> {
+        let mut vec = vec!["card"];
+        if selected {
+            vec.push("selected");
+        }
+
+        if card.suit.is_red() {
+            vec.push("red");
+        } else {
+            vec.push("black");
+        }
+
+        let mut attr = Attrs::empty();
+        attr.add_multiple(At::Class, &vec);
+        div![ attr, format!("{}", card)]
     }
 
     fn view(&self) -> Node<Msg> {
@@ -668,21 +1154,28 @@ impl GameSt {
 
         let table = {
             let mut entries: Vec<Node<Msg>> = vec![];
-            for entry in self.view.iter_table_entries() {
-                let e = self.mk_table_entry_div(entry);
-                entries.push(e)
+            for (eidx, entry) in self.view.enum_table_entries() {
+                let selected: bool = self.phase.is_tentry_selected(entry);
+                let mut e_div = self.mk_table_entry_div(entry, selected);
+                e_div.add_listener(
+                    simple_ev(Ev::Click, Msg::InGame(InGameMsg::ClickTableEntry(eidx)))
+                );
+                entries.push(e_div)
             }
+
             div![
                 attrs!{At::Class => "container"},
                 p!["Table"],
-                div![ attrs!{At::Class => "table"},  entries ]
+                div![ attrs!{At::Class => "table"},  entries ],
             ]
         };
 
         let hand = {
             let mut cards: Vec<Node<Msg>> = vec![];
-            for (cidx, card) in self.view.iter_hand_cards().enumerate() {
-                let mut c_div = self.mk_card_div(card);
+            let selected_card_idx = self.phase.get_hand_selected_card();
+            for (cidx, card) in self.view.enum_hand_cards() {
+                let selected: bool = selected_card_idx.map_or(false, |sidx| sidx == cidx);
+                let mut c_div = self.mk_hand_card_div(card, selected);
                 c_div.add_listener(
                     simple_ev(Ev::Click, Msg::InGame(InGameMsg::ClickHandCard(cidx)))
                 );
@@ -696,49 +1189,122 @@ impl GameSt {
             ]
         };
 
-        let msg = match &self.phase {
+        // TODO: if a user has a declaration on the table, be helpful about their possible actions
+        // :)
+        let phase_elem = match &self.phase {
             GamePhase::OthersTurn(_) => p!["Waiting for other player's turn"],
             GamePhase::MyTurn(TurnProgress::Nothing(msg)) => p![msg],
-            GamePhase::MyTurn(TurnProgress::CardSelected(cidx)) => {
-                    let card = &self.view.own_hand.cards[*cidx];
-
-                    let span : Node<Msg> = if card.suit.is_red() {
-                        span![ style!{"color" => "red"}, format!("{}", card) ]
-                    } else {
-                        span![ style!{"color" => "black"}, format!("{}", card) ]
-                    };
-
-                    let mut div = div![];
-                    {
-                        let msg = InGameMsg::LayDown(*cidx);
-                        div.add_child(
-                            button![ simple_ev(Ev::Click, Msg::InGame(msg)), "Play ", span.clone()]
-                        );
-                    }
-
-                    {
-                        let msg = InGameMsg::TakeWith(*cidx);
-                        div.add_child(
-                            button![ simple_ev(Ev::Click, Msg::InGame(msg)), "Take with ", span.clone()]
-                        );
-                    }
-
-                    if !card.rank.is_figure() {
-                        let msg = InGameMsg::DeclareWith(*cidx);
-                        div.add_child(
-                            button![ simple_ev(Ev::Click, Msg::InGame(msg)), "Declare with ", span]
-                        );
-                    };
-
-                    div
-            }
-            GamePhase::MyTurn(TurnProgress::DeclaringWith(cidx, tsel)) => unimplemented!(),
+            GamePhase::MyTurn(TurnProgress::CardSelected(cidx)) => self.view_selected_card(*cidx),
+            GamePhase::MyTurn(TurnProgress::DeclaringWith(cidx, ts)) => self.view_declaration(*cidx, ts),
             GamePhase::MyTurn(TurnProgress::GatheringWith(cidx, tsel)) => unimplemented!(),
+            GamePhase::MyTurn(TurnProgress::RaisingWith(cidx, tsel)) => unimplemented!(),
             GamePhase::MyTurn(TurnProgress::ActionIssued(a)) => p!["Issued action. Waiting for server."],
         };
+        let mut phase = div![
+            attrs!{At::Class => "container"},
+            phase_elem,
+        ];
 
-        div![ table, hand, msg]
+        if self.tmp_error_msg.len() > 0 {
+            phase.add_child(p![ class!["error-msg"], self.tmp_error_msg ]);
+        }
+
+        div![table, hand, phase]
     }
+
+    fn view_selected_card(&self, cidx: usize) -> Node<Msg> {
+        let card = &self.view.own_hand.cards[cidx];
+        let span = card.to_elem();
+        let mut div = div![];
+        {
+            let msg = InGameMsg::LayDown(cidx);
+            div.add_child(
+                button![ simple_ev(Ev::Click, Msg::InGame(msg)), "Lay down ", span.clone()]
+            );
+        }
+
+        if !card.rank.is_figure() {
+            let msg = InGameMsg::DeclareWith(cidx);
+            div.add_child(
+                button![ simple_ev(Ev::Click, Msg::InGame(msg)), "Declare with ", span.clone()]
+            );
+        };
+
+        {
+            let msg = InGameMsg::TakeWith(cidx);
+            div.add_child(
+                button![ simple_ev(Ev::Click, Msg::InGame(msg)), "Take with ", span.clone()]
+            );
+        }
+
+        div
+    }
+
+    fn view_declaration(&self, cidx: usize, ts: &Option<DeclareSelection>) -> Node<Msg> {
+        let card = &self.view.own_hand.cards[cidx];
+
+        // NB: we can use that to filter user choices.
+        let sum_set = self.view.iter_hand_cards()
+            .filter(|c| *c != card && !c.rank.is_figure() && c.rank.0 > card.rank.0)
+            .map(|c| c.rank.0)
+            .collect::<std::collections::BTreeSet<u8>>();
+
+        match ts {
+            None => {
+                let mut div = div![
+                    p!["Declaring with: ", card.to_elem()],
+                    span![" declaration value: "]
+                ];
+                let msg_fn = |x: String| Msg::InGame(InGameMsg::DeclareSetSum(x.parse::<u8>().unwrap()));
+                let mut opts = vec![];
+                for i in 2..11 {
+                    opts.push(option![i.to_string(), attrs!{At::Value => i.to_string()}])
+                }
+                div.add_child(label!["Declaration value:", attrs!{ At::For => "sel-declval" }]);
+                div.add_child(
+                    select![
+                        opts,
+                        input_ev(Ev::Input, msg_fn),
+                        attrs!{ At::Id => "sel-declval" },
+                    ],
+                );
+
+                /*
+                for i in 2..11 {
+                //for i in sum_set.iter().clone() {
+                    div.add_child(
+                        button![ simple_ev(Ev::Click, msg_fn(i)), i.to_string() ]
+                    );
+                }
+                */
+
+                div
+            },
+
+            Some(ts) => {
+                let mut div = div![
+                    p!["Declaring with ",
+                       card.to_elem(),
+                       format!(" for a total of "),
+                       span![ style!{"color" => "blue"}, format!("{}", ts.sum) ],
+                       format!(" (select cards from the table)"),
+                    ],
+                    p!["Selection: ", ts.to_elem()],
+                    //p![format!("Selection: ", ts.to_elem()),
+                ];
+
+                if ts.is_ready() {
+                    let msg = Msg::InGame(InGameMsg::FinalizePhase);
+                    let done = button![simple_ev(Ev::Click, msg), "Play"];
+                    div.add_child(done);
+                }
+
+                div
+            },
+        }
+    }
+
+
 }
 
 /// Demultiplexers
@@ -815,11 +1381,9 @@ fn after_mount(url: Url, orders: &mut impl Orders<Msg>) -> AfterMount<Model> {
     let url = url::Url::parse(&href).expect("invalid url");
     let join_game_id = url.query_pairs().find(|(k,_v)| k == "join").map(|(_k,v)| v);
 
-    let player_name = if let Some(storage) = seed::storage::get_storage() {
-        seed::storage::load_data(&storage, "player_name")
-    } else {
-        None
-    }.unwrap_or("".to_string());
+    let player_name = get_string_from_storage("player_name");
+    let debug_hand = get_string_from_storage("debug_hand_cards");
+    let debug_table = get_string_from_storage("debug_table_cards");
 
     if let Some(game_id) = join_game_id {
         let joinst = JoinSt {
@@ -833,6 +1397,8 @@ fn after_mount(url: Url, orders: &mut impl Orders<Msg>) -> AfterMount<Model> {
             nplayers: DEFAULT_NR_PLAYERS,
             player_name: player_name,
             start_game_err: None,
+            debug_hand: debug_hand,
+            debug_table: debug_table,
         };
         AfterMount::new(Model::Init(initst))
     }
