@@ -7,9 +7,9 @@
 use std::convert::TryFrom;
 
 use serde::{Deserialize, Serialize};
-use crate::{game, deck};
+use crate::{game, deck, table};
 
-pub use game::PlayerTpos;
+pub use table::PlayerTpos;
 
 /// Server <-> client interaction
 

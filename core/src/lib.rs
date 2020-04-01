@@ -13,9 +13,12 @@ extern crate rand;
 pub mod error;
 pub mod card;
 pub mod deck;
+pub mod table;
 pub mod game;
 pub mod srvcli;
+pub mod repr;
 
 pub use card::{Card, Rank, Suit};
 pub use deck::Deck;
-pub use game::{Game, PlayerGameView, PlayerAction, TableEntry, Declaration, DeclAction};
+pub use table::{TableEntry, Declaration};
+pub use game::{Game, PlayerGameView, PlayerAction, DeclAction};

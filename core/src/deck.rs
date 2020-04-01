@@ -76,8 +76,3 @@ impl TryFrom<&str> for Deck {
 
 }
 
-impl std::fmt::Display for Deck {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        f.debug_list().entries(self.cards.iter()).finish()
-    }
-}

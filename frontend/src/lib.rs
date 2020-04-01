@@ -182,7 +182,8 @@ impl InitSt {
                     }
 
                     Err(x) => {
-                        self.start_game_err = Some(format!("Could not create new game: {:?}", x));
+                        self.start_game_err = Some("Could not create new game".to_string());
+                        log!(format!("Error creating game: {:?}", x));
                     }
                 }
             },
@@ -642,7 +643,7 @@ struct DeclareSelection {
 
 impl DeclareSelection {
     pub fn new(hcard: &core::Card, sum: u8) -> Result<DeclareSelection, String> {
-        assert!(sum > 1 && sum <= 10);
+        assert!(sum >= 1 && sum <= 10);
 
         let mut current = vec![];
         let mut card_groups = vec![];
@@ -1230,6 +1231,13 @@ impl GameSt {
             );
         };
 
+        if !card.rank.is_figure() {
+            let msg = InGameMsg::RaiseWith(cidx);
+            div.add_child(
+                button![ simple_ev(Ev::Click, Msg::InGame(msg)), "Raise with ", span.clone()]
+            );
+        };
+
         {
             let msg = InGameMsg::TakeWith(cidx);
             div.add_child(
@@ -1257,7 +1265,7 @@ impl GameSt {
                 ];
                 let msg_fn = |x: String| Msg::InGame(InGameMsg::DeclareSetSum(x.parse::<u8>().unwrap()));
                 let mut opts = vec![];
-                for i in 2..11 {
+                for i in 1..11 {
                     opts.push(option![i.to_string(), attrs!{At::Value => i.to_string()}])
                 }
                 div.add_child(label!["Declaration value:", attrs!{ At::For => "sel-declval" }]);

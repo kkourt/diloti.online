@@ -8,6 +8,7 @@ use std::clone::Clone;
 
 use super::deck::Deck;
 use super::card::Card;
+use super::table::{Table, Declaration, PlayerTpos, TableEntry};
 
 use serde::{Deserialize, Serialize};
 
@@ -36,54 +37,7 @@ pub enum PlayerAction {
     TakeWith,    /* TODO */
 }
 
-#[derive(Clone, Hash, PartialEq, Eq, Debug, Serialize, Deserialize)]
-pub struct Declaration {
-    /// groups of cards
-    pub cards: Vec<Vec<Card>>,
-    /// Last player that made this declaration
-    pub player: PlayerTpos,
-}
 
-impl Declaration {
-
-    pub fn cards(&self) -> &Vec<Vec<Card>> {
-        &self.cards
-    }
-
-    pub fn player(&self) -> PlayerTpos {
-        self.player
-    }
-
-    pub fn value(&self) -> u8 {
-        self.cards[0].iter().fold(0, |acc, x| acc + x.rank.0)
-    }
-
-    pub fn is_group(&self) -> bool {
-        self.cards.len() > 1
-    }
-
-    pub fn new(cards: Vec<Vec<Card>>, player: PlayerTpos) -> Option<Declaration> {
-        let len = cards.len();
-        if len > 1 {
-            let val = cards[0].iter().fold(0, |acc, x| acc + x.rank.0);
-            for i in 1..len {
-                let val_i = cards[i].iter().fold(0, |acc, x| acc + x.rank.0);
-                if val_i != val {
-                    return None;
-                }
-            }
-        }
-
-        Some(Declaration {
-            cards: cards,
-            player: player,
-        })
-    }
-
-    pub fn into_inner(self) -> (Vec<Vec<Card>>, PlayerTpos) {
-        (self.cards, self.player)
-    }
-}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InvalidAction {
@@ -91,27 +45,10 @@ pub struct InvalidAction {
     reason: String,
 }
 
-
-/// Player identifier based on its position on the table
-#[derive(Copy, Clone, PartialEq, Eq, Debug, Hash, Serialize, Deserialize)]
-pub struct PlayerTpos(pub u8);
-
-#[derive(Clone, Hash, PartialEq, Eq, Serialize, Deserialize)]
-pub enum TableEntry {
-    Card(Card),
-    Decl(Declaration),
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct Table {
-    pub entries: Vec<TableEntry>,
-}
-
 #[derive(Clone, Debug)]
 struct Player {
     pub hand: Deck,
 }
-
 
 #[derive(Clone, Debug)]
 pub struct Game<R: rand::Rng + Clone> {
@@ -150,54 +87,6 @@ pub enum GameState {
     NextPlayer(PlayerTpos),
     RoundDone,
     GameDone,
-}
-
-impl TableEntry {
-    pub fn unwrap_card(self) -> Card {
-        match self {
-            TableEntry::Card(c) => c,
-            TableEntry::Decl(_) => panic!("unwrap_card() called on a Declaration"),
-        }
-    }
-
-    pub fn unwrap_decl(self) -> Declaration {
-        match self {
-            TableEntry::Decl(d) => d,
-            TableEntry::Card(_) => panic!("unwrap_decl() called on a Card"),
-        }
-    }
-}
-
-impl Table {
-    pub fn remove_card(&mut self, arg: &Card) -> Option<Card> {
-        let idx = self.entries.iter().position(|e| {
-            match e {
-                TableEntry::Card(c) => c == arg,
-                _ => false,
-            }
-        })?;
-
-        Some(self.entries.remove(idx).unwrap_card())
-    }
-
-    pub fn remove_decl(&mut self, arg: &Declaration) -> Option<Declaration> {
-        let idx = self.entries.iter().position(|e| {
-            match e {
-                TableEntry::Decl(d) => d == arg,
-                _ => false,
-            }
-        })?;
-
-        Some(self.entries.remove(idx).unwrap_decl())
-    }
-
-    pub fn add_decl(&mut self, d: Declaration) {
-        self.entries.push(TableEntry::Decl(d))
-    }
-
-    pub fn add_card(&mut self, c: Card) {
-        self.entries.push(TableEntry::Card(c))
-    }
 }
 
 impl<R: rand::Rng + Clone> Game<R> {
@@ -351,11 +240,20 @@ impl<R: rand::Rng + Clone> Game<R> {
                     cards.extend_from_slice(&cvec)
                 }
 
-                self.add_table_decl(Declaration {
+                let mut decl = Declaration {
                     cards: cards,
                     player: tpos,
-                });
+                };
 
+                let decl_val = decl.value();
+                assert!(decl_val >= 1 && decl_val <= 10);
+                if let Some(te) = self.table.remove_entry_with_value(decl_val) {
+                    decl.merge_table_entry(te)
+                }
+
+                assert!(self.table.remove_entry_with_value(decl_val).is_none()); // there should be only a single entry with this value. I think...
+
+                self.add_table_decl(decl);
             }
 
             _ => unimplemented!(),
@@ -441,28 +339,6 @@ impl PlayerGameView {
     }
 }
 
-impl std::fmt::Display for PlayerTpos {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        let PlayerTpos(pid) = *self;
-        write!(f, "P{}", pid)
-    }
-}
-
-impl std::fmt::Debug for TableEntry {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        match self {
-            Self::Card(c) => write!(f, "{}", c),
-            Self::Decl(d) => unimplemented!(),
-        }
-    }
-}
-
-impl std::fmt::Display for Table {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        f.debug_list().entries(self.entries.iter()).finish()
-    }
-}
-
 impl DeclAction {
     pub fn is_valid(&self) -> Result<(), String> {
 
@@ -498,6 +374,7 @@ impl DeclAction {
 
         Ok(())
     }
+
 }
 
 #[test]
