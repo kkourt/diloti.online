@@ -4,10 +4,8 @@
 // vim: set expandtab softtabstop=4 tabstop=4 shiftwidth=4:
 //
 
-use std::convert::TryFrom;
-
 use serde::{Deserialize, Serialize};
-use crate::{game, deck, table};
+use crate::{game, deck, table, actions, repr};
 
 pub use table::PlayerTpos;
 
@@ -87,7 +85,7 @@ pub enum ServerMsg {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ClientMsg {
     StartGame,
-    PlayerAction(game::PlayerAction),
+    PlayerAction(actions::PlayerAction),
 }
 
 impl CreateReq {
@@ -103,17 +101,17 @@ impl CreateReq {
             if debug.hand_s.len() == 0 {
                 None
             } else {
-                deck::Deck::try_from(debug.hand_s.as_str()).ok()
+                repr::DeckRepr::new(&debug.hand_s).parse()
             }
         } else { None }
     }
 
-    pub fn get_debug_table(&self) -> Option<deck::Deck> {
+    pub fn get_debug_table(&self) -> Option<table::Table> {
         if let Some(debug) = &self.debug {
             if debug.table_s.len() == 0 {
                 None
             } else {
-                deck::Deck::try_from(debug.table_s.as_str()).ok()
+                repr::TableRepr::new(&debug.table_s).parse()
             }
         } else { None }
     }

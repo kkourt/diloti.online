@@ -26,7 +26,11 @@ pub struct DeckRepr(pub String);
 pub struct DeclRepr(pub String);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct TableEntryRepr(pub String);
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct TableRepr(pub String);
+
 
 
 /**
@@ -150,6 +154,23 @@ fn parse_decl<'a, I>(mut iter: I) -> Option<Declaration> where
     })
 }
 
+impl TableEntryRepr {
+    pub fn new<T: Into<String>>(s: T) -> Self {
+        Self(s.into())
+    }
+
+    pub fn parse(&self) -> Option<TableEntry> {
+        let iter = self.0.split_whitespace();
+        parse_table_entry(iter).1
+    }
+
+    pub fn fmt_table_entry(entry: &TableEntry, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        match entry {
+            TableEntry::Card(c) => write!(f, "{}", c),
+            TableEntry::Decl(d) => DeclRepr::fmt_declaration(d, f),
+        }
+    }
+}
 
 /**
  * Table
@@ -165,48 +186,57 @@ impl TableRepr {
         parse_table(iter)
     }
 
-    pub fn fmt_table_entry(entry: &TableEntry, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        match entry {
-            TableEntry::Card(c) => write!(f, "{}", c),
-            TableEntry::Decl(d) => DeclRepr::fmt_declaration(d, f),
-        }
-    }
-
     pub fn fmt_table(table: &Table, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         let mut sep = "";
         for entry in table.entries.iter() {
             f.write_str(sep)?;
             sep = " ";
-            Self::fmt_table_entry(&entry, f)?;
+            TableEntryRepr::fmt_table_entry(&entry, f)?;
         }
 
         Ok(())
     }
 }
 
-fn parse_table<'a, I>(mut iter: I) -> Option<Table> where
+fn parse_table_entry<'a, I>(mut iter: I) -> (I,Option<TableEntry>) where
+    I: Iterator<Item=&'a str>,
+{
+    let tok = match iter.next() {
+        None => return (iter, None),
+        Some(x) => x,
+    };
+
+    let res = if let Some(card) = Card::try_from(tok).ok() {
+        Some(TableEntry::Card(card))
+    } else if let Some(tpos) = parse_decl_begin(tok) {
+        let ret = parse_decl_body(iter);
+        iter = ret.0;
+        let cards = match ret.1 {
+            None => return (iter, None),
+            Some(x) => x,
+        };
+        Some(TableEntry::Decl(Declaration{
+            cards: cards,
+            player: tpos,
+        }))
+    } else {
+        None
+    };
+
+    (iter, res)
+}
+
+fn parse_table<'a, I>(iter: I) -> Option<Table> where
     I: Iterator<Item=&'a str>,
 {
     let mut entries = vec![];
+    let mut iter_peek = iter.peekable();
 
-    loop {
-        let tok = match iter.next() {
-            None => break,
-            Some(x) => x,
-        };
-        if let Some(card) = Card::try_from(tok).ok() {
-            entries.push(TableEntry::Card(card))
-        } else if let Some(tpos) = parse_decl_begin(tok) {
-            let ret = parse_decl_body(iter);
-            iter = ret.0;
-            let cards = ret.1?;
-            entries.push(TableEntry::Decl(Declaration{
-                cards: cards,
-                player: tpos,
-            }));
-        } else {
-            return None;
-        }
+    while iter_peek.peek().is_some() {
+        let ret = parse_table_entry(iter_peek);
+        iter_peek = ret.0;
+        let te = ret.1?;
+        entries.push(te);
     }
 
     Some(Table {
@@ -226,7 +256,7 @@ impl std::fmt::Display for Deck {
 
 impl std::fmt::Debug for TableEntry {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        TableRepr::fmt_table_entry(self, f)
+        TableEntryRepr::fmt_table_entry(self, f)
     }
 }
 
@@ -234,13 +264,4 @@ impl std::fmt::Display for Table {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         TableRepr::fmt_table(self, f)
     }
-}
-
-
-#[test]
-fn t0() {
-    let table = TableRepr::new("S4 HT H9").parse().unwrap();
-    let hand = DeckRepr::new("D5 D9 C3").parse().unwrap();
-    println!("hand: {}", hand);
-    println!("table: {}", table);
 }

@@ -74,16 +74,6 @@ fn iter_to_elem<T: ToElem, I: Iterator<Item=T>>(start: &str, mut iter: I, end: &
         span
 }
 
-/*
-impl ToElem for core::Declaration {
-    fn to_elem(&self) -> Node<Msg> {
-        let mut span = span![]
-        let val = format!("⚐{}", self.value());
-        span.add_child(
-    }
-}
-*/
-
 impl ToElem for core::Deck {
     fn to_elem(&self) -> Node<Msg> {
         let mut span = span![span!["["]];
@@ -99,7 +89,19 @@ impl ToElem for core::Deck {
     }
 }
 
-impl ToElem for DeclareSelection {
+impl ToElem for core::TableEntry {
+    fn to_elem(&self) -> Node<Msg> {
+        match self {
+            core::TableEntry::Card(c) => c.to_elem(),
+            core::TableEntry::Decl(d) => {
+                span![ style!{"color" => "blue"}, format!("\u{2605}{}", d.value()) ]
+            },
+        }
+    }
+}
+
+
+impl ToElem for core::DeclActionBuilder {
     fn to_elem(&self) -> Node<Msg> {
         let mut span = span![];
 
@@ -112,14 +114,12 @@ impl ToElem for DeclareSelection {
             span.add_child(curr);
         }
 
-        if self.action.card_groups.len() > 0 {
-            //span.add_child(span!["{"]);
-            for cardv in self.action.card_groups.iter() {
+        if self.action.tentries.len() > 0 {
+            for tev in self.action.tentries.iter() {
                 // NB: Can we avoid the cloned here?
-                let e = iter_to_elem(" (", cardv.iter().cloned(), ") ");
+                let e = iter_to_elem(" (", tev.iter().cloned(), ") ");
                 span.add_child(e);
             }
-            //span.add_child(span!["}"]);
         }
 
         span
@@ -630,117 +630,11 @@ impl LobbySt {
 
 /// Game state
 
-#[derive(Debug)]
-// NB: my understanding of the rules is that you cannot do arbitrary declarations using existing
-// declaratoins. You need to use plain cards.
-//
-struct DeclareSelection {
-    sum: u8,
-    current: Vec<core::Card>,
-    entries_set: std::collections::HashSet<core::TableEntry>,
-    action: core::DeclAction,
-}
-
-impl DeclareSelection {
-    pub fn new(hcard: &core::Card, sum: u8) -> Result<DeclareSelection, String> {
-        assert!(sum >= 1 && sum <= 10);
-
-        let mut current = vec![];
-        let mut card_groups = vec![];
-
-        if hcard.rank.0 > sum {
-            return Err(format!("Rank of hand card {} is larger than the declaration sum {}", hcard.rank.0, sum));
-        } else if hcard.rank.0 == sum {
-            card_groups.push(vec![hcard.clone()]);
-        } else {
-            current.push(hcard.clone())
-        }
-
-        let ret = DeclareSelection {
-            sum: sum,
-            current: current,
-            entries_set: std::collections::HashSet::new(),
-            action: core::DeclAction {
-                hand_card: hcard.clone(),
-                card_groups: card_groups,
-                decl_groups: vec![],
-            }
-        };
-
-        Ok(ret)
-    }
-
-    pub fn reset(&mut self) {
-        *self = DeclareSelection::new(&self.action.hand_card, self.sum).unwrap();
-    }
-
-    pub fn is_ready(&self) -> bool {
-        if self.current.len() != 0 {
-            return false;
-        }
-
-        self.action.is_valid().is_ok()
-    }
-
-    pub fn add_table_entry(&mut self, tentry: &core::TableEntry) -> Result<(), String> {
-        let ret = self.do_add_table_entry(tentry);
-        if ret.is_ok() {
-            self.entries_set.insert(tentry.clone());
-        }
-
-        ret
-    }
-
-    fn do_add_table_entry(&mut self, tentry: &core::TableEntry) -> Result<(), String> {
-        match tentry {
-            core::TableEntry::Card(tcard) => {
-                let mut current_sum = self.current_sum();
-                current_sum += tcard.rank.0;
-                if current_sum > self.sum {
-                    return Err(format!("Cannot add {} to current declaration", tcard));
-                }
-                self.current.push(tcard.clone());
-                assert_eq!(current_sum, self.current_sum());
-                if current_sum == self.sum {
-                    let curr = self.current.drain(..).collect();
-                    self.action.card_groups.push(curr);
-                }
-                Ok(())
-            },
-            core::TableEntry::Decl(tdecl) => {
-                if tdecl.value() != self.sum {
-                    return Err(format!("Cannot add declared cards of value {} to current declaration with value {}", tdecl.value(), self.sum))
-                }
-                self.action.decl_groups.push(tdecl.clone());
-                Ok(())
-            }
-        }
-    }
-
-    pub fn is_tentry_selected(&self, tentry: &core::TableEntry) -> bool {
-        self.entries_set.contains(tentry)
-    }
-
-    fn current_sum(&self) -> u8 {
-        self.current.iter().fold(0, |acc, x| acc + x.rank.0)
-    }
-
-    pub fn make_decl_action(&self) -> core::DeclAction {
-        self.action.clone()
-    }
-
-    pub fn make_action(&self) -> core::PlayerAction {
-        core::PlayerAction::Declare(self.make_decl_action())
-    }
-
-}
-
 enum TurnProgress {
-    Nothing(String),
+    Nothing(Node<Msg>),
     CardSelected(usize),
-    DeclaringWith(usize, Option<DeclareSelection>),
-    RaisingWith(usize, Option<usize>),
-    GatheringWith(usize, DeclareSelection),
+    DeclaringWith(usize, Option<core::DeclActionBuilder>),
+    CapturingWith(usize, Option<core::CaptureActionBuilder>),
     ActionIssued(core::PlayerAction),
 }
 
@@ -759,8 +653,7 @@ impl GamePhase {
             MyTurn(Nothing(_)) => None,
             MyTurn(CardSelected(x)) => Some(*x),
             MyTurn(DeclaringWith(x,_)) => Some(*x),
-            MyTurn(RaisingWith(x,_)) => Some(*x),
-            MyTurn(GatheringWith(x,_)) => Some(*x),
+            MyTurn(CapturingWith(x,_)) => Some(*x),
             MyTurn(ActionIssued(_)) => None,
         }
     }
@@ -775,10 +668,9 @@ impl GamePhase {
             MyTurn(Nothing(_)) => false,
             MyTurn(CardSelected(x)) => false,
             MyTurn(DeclaringWith(x, None)) => false,
-            MyTurn(DeclaringWith(x, Some(ds))) => ds.is_tentry_selected(tentry),
+            MyTurn(DeclaringWith(x, Some(ds))) => ds.has_tentry(tentry),
             // TODO
-            MyTurn(RaisingWith(x,_)) => unimplemented!(),
-            MyTurn(GatheringWith(x,_)) => unimplemented!(),
+            MyTurn(CapturingWith(x,_)) => unimplemented!(),
         }
     }
 }
@@ -789,7 +681,8 @@ impl From<(&LobbyInfo, &core::PlayerGameView)> for GamePhase {
         let turn_tpos = pview.turn;
         let self_tpos = lobby_info.players[lobby_info.self_id.0].tpos;
         if self_tpos == turn_tpos {
-            GamePhase::MyTurn(TurnProgress::Nothing("Your turn to play (select a card from your hand)".into()))
+            let msg = p!["Your turn to play (select a card from your hand)"];
+            GamePhase::MyTurn(TurnProgress::Nothing(msg))
         } else {
             let turn_pid = lobby_info.players
                 .iter()
@@ -841,9 +734,8 @@ enum InGameMsg {
     ClickTableEntry(usize),
     LayDown(usize),
     DeclareWith(usize), // card index
-    RaiseWith(usize),   // card index
     DeclareSetSum(u8),  // sum
-    TakeWith(usize),
+    CaptureWith(usize),
     FinalizePhase,
 }
 
@@ -885,7 +777,10 @@ impl GameSt {
     fn invalid_action(&mut self, err: String) {
         assert!(self.myturn());
         // reset phase
-        let user_msg = format!("Invalid play: {}. Still your turn!", err);
+        let user_msg = div![
+            p![format!("Invalid play: {}", err)],
+            p!["Still your turn! Play a card from your hand."],
+        ];
         self.phase = GamePhase::MyTurn(TurnProgress::Nothing(user_msg));
     }
 
@@ -902,7 +797,7 @@ impl GameSt {
 
     fn issue_action_validate(&mut self, act: core::PlayerAction) {
         log(format!("Issuing action: {:?}", act));
-        let valid_check = self.view.validate_action(&act);
+        let valid_check = act.validate(&self.view);
         let invalid_msg = match valid_check {
             Ok(()) => {
                 self.issue_action(act);
@@ -929,17 +824,7 @@ impl GameSt {
                     // progress
                     MyTurn(CardSelected(prev_x))    |
                     MyTurn(DeclaringWith(prev_x,_)) |
-                    MyTurn(RaisingWith(prev_x,_))   |
-                    MyTurn(GatheringWith(prev_x,_)) => {
-
-                        // NB: this looks bad on mobile...
-                        /*
-                        if *x == prev_x {
-                            Some(MyTurn(Nothing("Select a card to play".into())))
-                        } else {
-                            Some(MyTurn(CardSelected(*x)))
-                        }
-                        */
+                    MyTurn(CapturingWith(prev_x,_)) => {
                         Some(MyTurn(CardSelected(*x)))
                     },
                 };
@@ -973,8 +858,7 @@ impl GameSt {
                         None
                     },
                     // TODO
-                    MyTurn(RaisingWith(prev_x,_))   => None,
-                    MyTurn(GatheringWith(prev_x,_)) => None,
+                    MyTurn(CapturingWith(prev_x,_)) => None,
                 };
 
                 if let Some(x) = new_phase {
@@ -991,16 +875,20 @@ impl GameSt {
                 return None;
             },
 
+            InGameMsg::CaptureWith(cidx) => {
+                let cc = self.view.own_hand.cards[*cidx].clone();
+                unimplemented!()
+                /*
+                let action = core::PlayerAction::Capture(cc);
+                self.issue_action_validate(action);
+                return None;
+                */
+            },
+
             InGameMsg::DeclareWith(cidx) => {
                 self.phase = GamePhase::MyTurn(TurnProgress::DeclaringWith(*cidx, None));
                 return None;
             },
-
-            InGameMsg::RaiseWith(cidx) => {
-                self.phase = GamePhase::MyTurn(TurnProgress::RaisingWith(*cidx, None));
-                return None;
-            },
-
 
             InGameMsg::DeclareSetSum(sum) => {
                 let cidx = match self.phase {
@@ -1018,9 +906,9 @@ impl GameSt {
                     return None
                 }
 
-                match DeclareSelection::new(card, *sum) {
+                match core::DeclActionBuilder::new(card, *sum) {
                     Err(x) => self.tmp_error_msg = x,
-                    Ok(ts) => self.phase = GamePhase::MyTurn(TurnProgress::DeclaringWith(cidx, Some(ts))),
+                    Ok(db) => self.phase = GamePhase::MyTurn(TurnProgress::DeclaringWith(cidx, Some(db))),
                 }
 
                 return None;
@@ -1037,9 +925,6 @@ impl GameSt {
                     _ => unimplemented!(),
                 };
             },
-
-            _ => unimplemented!(),
-
         }
     }
 
@@ -1103,9 +988,7 @@ impl GameSt {
 
         let mut div = div![
             attr,
-            //span![ style!{"color" => "blue"}, format!("{}", decl.value()) ],
-            p![format!("★{}", decl.value())],
-            //p!["blah"]
+            p![format!("\u{2605}{}", decl.value())],
         ];
 
         for cardv in decl.cards.iter() {
@@ -1194,11 +1077,10 @@ impl GameSt {
         // :)
         let phase_elem = match &self.phase {
             GamePhase::OthersTurn(_) => p!["Waiting for other player's turn"],
-            GamePhase::MyTurn(TurnProgress::Nothing(msg)) => p![msg],
+            GamePhase::MyTurn(TurnProgress::Nothing(msg)) => msg.clone(),
             GamePhase::MyTurn(TurnProgress::CardSelected(cidx)) => self.view_selected_card(*cidx),
             GamePhase::MyTurn(TurnProgress::DeclaringWith(cidx, ts)) => self.view_declaration(*cidx, ts),
-            GamePhase::MyTurn(TurnProgress::GatheringWith(cidx, tsel)) => unimplemented!(),
-            GamePhase::MyTurn(TurnProgress::RaisingWith(cidx, tsel)) => unimplemented!(),
+            GamePhase::MyTurn(TurnProgress::CapturingWith(cidx, tsel)) => unimplemented!(),
             GamePhase::MyTurn(TurnProgress::ActionIssued(a)) => p!["Issued action. Waiting for server."],
         };
         let mut phase = div![
@@ -1231,24 +1113,17 @@ impl GameSt {
             );
         };
 
-        if !card.rank.is_figure() {
-            let msg = InGameMsg::RaiseWith(cidx);
-            div.add_child(
-                button![ simple_ev(Ev::Click, Msg::InGame(msg)), "Raise with ", span.clone()]
-            );
-        };
-
         {
-            let msg = InGameMsg::TakeWith(cidx);
+            let msg = InGameMsg::CaptureWith(cidx);
             div.add_child(
-                button![ simple_ev(Ev::Click, Msg::InGame(msg)), "Take with ", span.clone()]
+                button![ simple_ev(Ev::Click, Msg::InGame(msg)), "Capture with ", span.clone()]
             );
         }
 
         div
     }
 
-    fn view_declaration(&self, cidx: usize, ts: &Option<DeclareSelection>) -> Node<Msg> {
+    fn view_declaration(&self, cidx: usize, ts: &Option<core::DeclActionBuilder>) -> Node<Msg> {
         let card = &self.view.own_hand.cards[cidx];
 
         // NB: we can use that to filter user choices.
@@ -1289,19 +1164,19 @@ impl GameSt {
                 div
             },
 
-            Some(ts) => {
+            Some(db) => {
                 let mut div = div![
                     p!["Declaring with ",
                        card.to_elem(),
                        format!(" for a total of "),
-                       span![ style!{"color" => "blue"}, format!("{}", ts.sum) ],
+                       span![ style!{"color" => "blue"}, format!("{}", db.value) ],
                        format!(" (select cards from the table)"),
                     ],
-                    p!["Selection: ", ts.to_elem()],
+                    p!["Selection: ", db.to_elem()],
                     //p![format!("Selection: ", ts.to_elem()),
                 ];
 
-                if ts.is_ready() {
+                if db.is_ready() {
                     let msg = Msg::InGame(InGameMsg::FinalizePhase);
                     let done = button![simple_ev(Ev::Click, msg), "Play"];
                     div.add_child(done);

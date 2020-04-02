@@ -63,7 +63,7 @@ pub async fn player_setup(
                         },
                         Some(Ok(climsg)) => {
                             let req_s = climsg.to_str().unwrap();
-                            log::info!("Received message: {:?}", req_s);
+                            log::info!("Received message: {}", req_s);
                             let cli_req: srvcli::ClientMsg = serde_json::from_str(&req_s).unwrap();
                             let req = GameReq::ClientReq(self_pid, cli_req);
                             if let Err(x) = game_tx.send(req).await {
@@ -79,8 +79,8 @@ pub async fn player_setup(
                     match game_req {
                         Some(ForwardToClient(x)) => {
                             let json = serde_json::to_string(&x).expect("serialization failed");
+                            log::info!("Sending message: {}", json);
                             let msg = ws::Message::text(json);
-                            log::info!("Sending message {:?}", msg);
                             ws_tx.send(msg).await.expect("error sending to ws")
                         },
                         Some(RegistrationResult(x)) => {

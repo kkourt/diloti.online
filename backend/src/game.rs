@@ -24,8 +24,8 @@ pub use crate::chararr_id::GameId;
 
 #[derive(Debug, Clone)]
 pub struct GameDebug {
-    hand: Vec<core::Card>,
-    table: Vec<core::Card>,
+    hand: core::Deck,
+    table: core::Table,
 }
 
 #[derive(Debug, Clone)]
@@ -206,10 +206,6 @@ impl Game {
         self.get_player(pid).player_info.tpos
     }
 
-    fn is_players_turn(&self, pid: srvcli::PlayerId) -> bool {
-        unimplemented!()
-    }
-
     fn players_ready(&self) -> bool {
         self.players.len() == self.nplayers as usize
     }
@@ -243,7 +239,7 @@ impl Game {
                     let pview = self.curr_game.get_player_game_view(tpos);
                     let player = self.get_player_mut(pid);
 
-                    if let Err(errmsg) = pview.validate_action(&action) {
+                    if let Err(errmsg) = action.validate(&pview) {
                         let msg = srvcli::ServerMsg::InvalidAction(errmsg);
                         self.send_msg_to_pid(pid, msg).await;
                     } else {
@@ -279,8 +275,8 @@ impl Game {
 
 impl From<srvcli::CreateReq> for GameConfig {
     fn from(req: srvcli::CreateReq) -> Self {
-        let debug_hand = req.get_debug_hand().map(|x| x.to_inner());
-        let debug_table = req.get_debug_table().map(|x| x.to_inner());
+        let debug_hand = req.get_debug_hand();
+        let debug_table = req.get_debug_table();
         if debug_hand.is_none() || debug_table.is_none() {
             return GameConfig {
                 nplayers: req.nplayers,

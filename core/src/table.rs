@@ -42,11 +42,16 @@ impl Declaration {
     }
 
     pub fn value(&self) -> u8 {
+        assert!(self.cards.len() > 0);
         self.cards[0].iter().fold(0, |acc, x| acc + x.rank.0)
     }
 
     pub fn is_group(&self) -> bool {
         self.cards.len() > 1
+    }
+
+    pub fn is_plain(&self) -> bool {
+        self.cards.len() == 1
     }
 
     pub fn new(cards: Vec<Vec<Card>>, player: PlayerTpos) -> Option<Declaration> {
@@ -92,6 +97,20 @@ impl TableEntry {
         }
     }
 
+    pub fn is_card(&self) -> bool {
+        match self {
+            TableEntry::Card(_) => true,
+            TableEntry::Decl(_) => false,
+        }
+    }
+
+    pub fn is_decl(&self) -> bool {
+        match self {
+            TableEntry::Decl(_) => true,
+            TableEntry::Card(_) => false,
+        }
+    }
+
     pub fn unwrap_decl(self) -> Declaration {
         match self {
             TableEntry::Decl(d) => d,
@@ -99,10 +118,24 @@ impl TableEntry {
         }
     }
 
+    pub fn ref_decl(&self) -> &Declaration {
+        match self {
+            TableEntry::Decl(d) => d,
+            TableEntry::Card(_) => panic!("ref_decl() called on a Card"),
+        }
+    }
+
     pub fn value(&self) -> u8 {
         match self {
             TableEntry::Decl(d) => d.value(),
             TableEntry::Card(c) => c.rank.0,
+        }
+    }
+
+   pub fn card_or_else<E, F: FnOnce() -> E>(self, errfn: F) -> Result<Card, E> {
+        match self {
+            TableEntry::Card(c) => Ok(c),
+            TableEntry::Decl(_) => Err(errfn()),
         }
     }
 }
@@ -136,6 +169,15 @@ impl Table {
 
     pub fn add_card(&mut self, c: Card) {
         self.entries.push(TableEntry::Card(c))
+    }
+
+    pub fn find_decl_from(&self, tpos: PlayerTpos) -> Option<&Declaration> {
+        self.entries.iter().find_map(|e| {
+            match e {
+                TableEntry::Decl(d) if d.player == tpos => Some(d),
+                _ => None,
+            }
+        })
     }
 
     /// remove the first entry found with the given value, or return None if value does not exist

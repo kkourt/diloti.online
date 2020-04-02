@@ -17,8 +17,13 @@ pub mod table;
 pub mod game;
 pub mod srvcli;
 pub mod repr;
+pub mod actions;
+
+#[cfg(test)]
+pub mod tests;
 
 pub use card::{Card, Rank, Suit};
 pub use deck::Deck;
-pub use table::{TableEntry, Declaration};
-pub use game::{Game, PlayerGameView, PlayerAction, DeclAction};
+pub use table::{Table, TableEntry, Declaration};
+pub use game::{Game, PlayerGameView};
+pub use actions::{PlayerAction, DeclAction, DeclActionBuilder, CaptureAction, CaptureActionBuilder};

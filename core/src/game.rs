@@ -9,6 +9,7 @@ use std::clone::Clone;
 use super::deck::Deck;
 use super::card::Card;
 use super::table::{Table, Declaration, PlayerTpos, TableEntry};
+use super::actions::{PlayerAction, DeclAction};
 
 use serde::{Deserialize, Serialize};
 
@@ -20,43 +21,30 @@ use serde::{Deserialize, Serialize};
 // "lost" when the game is played. The state of each card is implicit in which container it is
 // stored in.
 
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DeclAction {
-    pub hand_card: Card, // hand card is included twice: here, and also in the card_groups vector
-    pub card_groups: Vec<Vec<Card>>,
-    // If you make a decleration, you *must* add to it existing cards and declarations of the same
-    // value, so I think it's OK if we allow the user to specify this.
-    pub decl_groups: Vec<Declaration>,
+pub struct RaiseAction {
+    pub hand_card: Card,
+    pub decl: Declaration,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum PlayerAction {
-    LayDown(Card),
-    Declare(DeclAction),
-    RaiseWith,   /* TODO */
-    TakeWith,    /* TODO */
-}
-
-
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct InvalidAction {
-    action: PlayerAction,
-    reason: String,
+pub struct TakeAction {
+    pub hand_card: Card,
 }
 
 #[derive(Clone, Debug)]
-struct Player {
+pub struct Player {
     pub hand: Deck,
 }
 
 #[derive(Clone, Debug)]
 pub struct Game<R: rand::Rng + Clone> {
-    table: Table,
-    main_deck: Deck,
-    players: Vec<Player>,
+    pub(crate) table: Table,
+    pub(crate) main_deck: Deck,
+    pub(crate) players: Vec<Player>,
 
-    pub turn: PlayerTpos,
+    pub(crate) turn: PlayerTpos,
 
     rng: R,
 }
@@ -95,12 +83,13 @@ impl<R: rand::Rng + Clone> Game<R> {
         Self::init(1, rng)
     }
 
-    pub fn new_1p_debug(rng: R, mut tcards: Vec<Card>, hcards: Vec<Card>) -> Game<R> {
-        let table_entries : Vec<TableEntry> = tcards.drain(..).map(|c| TableEntry::Card(c)).collect();
-        let players = vec![ Player { hand: Deck { cards: hcards, }, } ];
+    pub fn new_1p_debug(rng: R, table: Table, hand: Deck) -> Game<R> {
+        let players = vec![
+            Player { hand: hand },
+        ];
 
         Game {
-            table: Table { entries: table_entries },
+            table: table,
             main_deck: Deck::empty(),
             players: players,
             turn: PlayerTpos(0),
@@ -201,8 +190,8 @@ impl<R: rand::Rng + Clone> Game<R> {
         self.turn = PlayerTpos( (self.turn.0 + 1) % nplayers);
     }
 
-    // poor man's transaction
     pub fn apply_action(&self, tpos: PlayerTpos, action: PlayerAction) -> Result<Self, String> {
+        // poor man's transaction
         let mut new = self.clone();
         new.do_apply_action(tpos, action)?;
         Ok(new)
@@ -210,55 +199,81 @@ impl<R: rand::Rng + Clone> Game<R> {
 
     // NB: In case of an error, state might be incosistent.
     fn do_apply_action(&mut self, tpos: PlayerTpos, action: PlayerAction) -> Result<(), String> {
-        self.get_player_game_view(tpos).validate_action(&action)?;
+
+        {
+            let pview = self.get_player_game_view(tpos);
+            action.validate(&pview)?
+        }
+
         match action {
             PlayerAction::LayDown(c) => {
                 let card = self.remove_player_card(tpos, &c).ok_or_else(|| "Card does not exist")?;
                 self.add_table_card(card);
             },
-
-            PlayerAction::Declare(mut da) => {
-                let mut cards : Vec<Vec<Card>> = vec![];
-                let mut count = 0;
-                for mut cg in da.card_groups.drain(..) {
-                    let mut cvec: Vec<Card> = vec![];
-                    for c in cg.drain(..) {
-                        let card = if count == 0 {
-                            self.remove_player_card(tpos, &c).ok_or_else(|| "Hand card does not exist")?
-                        } else {
-                            self.remove_table_card(&c).ok_or_else(|| "Table card does not exist")?
-                        };
-                        cvec.push(card);
-                        count += 1;
-                    }
-                    cards.push(cvec);
-                }
-
-                for d in da.decl_groups.drain(..) {
-                    let decl = self.remove_table_decl(&d).ok_or_else(|| "Table declaration does not exist")?;
-                    let (cvec, _) = decl.into_inner();
-                    cards.extend_from_slice(&cvec)
-                }
-
-                let mut decl = Declaration {
-                    cards: cards,
-                    player: tpos,
-                };
-
-                let decl_val = decl.value();
-                assert!(decl_val >= 1 && decl_val <= 10);
-                if let Some(te) = self.table.remove_entry_with_value(decl_val) {
-                    decl.merge_table_entry(te)
-                }
-
-                assert!(self.table.remove_entry_with_value(decl_val).is_none()); // there should be only a single entry with this value. I think...
-
-                self.add_table_decl(decl);
-            }
-
-            _ => unimplemented!(),
+            PlayerAction::Declare(da) => self.do_apply_decl_action(tpos, &da)?,
+            PlayerAction::Capture(ca) => unimplemented!(),
         }
         self.next_turn();
+        Ok(())
+    }
+
+    fn do_apply_decl_action(&mut self, tpos: PlayerTpos, da: &DeclAction) -> Result<(), String> {
+        let mut decl_cards : Vec<Vec<Card>> = vec![];
+        for (i, entries_v) in da.tentries.iter().enumerate() {
+            let entries_v_len = entries_v.len();
+            let mut cards_v = vec![];
+            for (j, te) in entries_v.iter().enumerate() {
+                match ((i,j), te) {
+                    // Hand card (by convention it's the first entry)
+                    ((0,0), TableEntry::Card(c)) => {
+                        let hand_card = self.remove_player_card(tpos, c).ok_or_else(|| "Hand card does not exist")?;
+                        cards_v.push(hand_card);
+                    },
+
+                    // Any card (by convention it's the first entry)
+                    (_, TableEntry::Card(c)) => {
+                        let table_card =  self.remove_table_card(c).ok_or_else(|| "Table card does not exist")?;
+                        cards_v.push(table_card);
+                    },
+
+                    // Plain declarations can be combined with other cards
+                    (_, TableEntry::Decl(d)) if d.is_plain() => {
+                        let decl = self.remove_table_decl(d).ok_or_else(|| "Table declaration does not exist")?;
+                        let (decl_cards, _) = decl.into_inner();
+                        assert!(decl_cards.len() == 1); // declaration is plain
+                        cards_v.extend_from_slice(&decl_cards[0]);
+                    },
+
+                    // Group declarations cannot be combined with other cards, and have to
+                    // be on their own
+                    ((_,0), TableEntry::Decl(d)) if d.is_group() => {
+                        if entries_v_len != 1 {
+                            return Err("Invalid declaration: group declaration cannot be combined with other cards".to_string());
+                        }
+                        assert!(cards_v.len() == 0); // should be true since j is 0
+                        let decl = self.remove_table_decl(d).ok_or_else(|| "Table declaration does not exist")?;
+                        let (cvv, _) = decl.into_inner();
+                        decl_cards.extend_from_slice(&cvv);
+                        break;
+                    },
+
+                    // TODO: if this ever hits, add more info
+                    _ => return Err("Invalid declaration".to_string()),
+                }
+            }
+
+            // NB: len might be 0 in case of group declaration
+            if cards_v.len() > 0 {
+                decl_cards.push(cards_v.drain(..).collect());
+            }
+        }
+
+        let decl = Declaration {
+            cards: decl_cards,
+            player: tpos,
+        };
+
+        self.add_table_decl(decl);
         Ok(())
     }
 }
@@ -300,83 +315,8 @@ impl PlayerGameView {
         self.iter_hand_cards().find(|hc| c == *hc).is_some()
     }
 
-    pub fn is_lay_down_valid(&self, c: &Card) -> Result<(), String> {
-        // RULE: you are not allow to lay down a figure card, if the same figure already exists on
-        // the table.
-        if c.rank.is_figure() {
-            let matching_figure : Option<&Card> = self.table.entries.iter().find_map(|te| {
-                match te {
-                    TableEntry::Card(tc) => if tc.rank == c.rank { Some(tc) } else { None },
-                    TableEntry::Decl(_) => None,
-                }
-            });
-
-            match matching_figure {
-                Some(tc) => return Err(format!("You cannot lay down a figure card ({}) if the same ({}) exists on the table. You have to take it!", c, tc)),
-                _ => (),
-            }
-        }
-
-        Ok(())
-    }
-
     pub fn is_my_turn(&self) -> bool {
         return self.turn == self.pid;
     }
-
-    pub fn validate_action(&self, action: &PlayerAction) -> Result<(), String> {
-        if !self.is_my_turn() {
-            return Err("Not this player's turn".into());
-        }
-
-        // TODO: check if user has a declaration on the table.
-
-        match action {
-            PlayerAction::LayDown(c)  => self.is_lay_down_valid(c),
-            PlayerAction::Declare(da) => da.is_valid(),
-            _ => unimplemented!(),
-        }
-    }
 }
 
-impl DeclAction {
-    pub fn is_valid(&self) -> Result<(), String> {
-
-        // size checks
-        if self.card_groups.len() == 0 {
-            return Err("Buggy Client. Empty card group.".into());
-        } else if self.card_groups.len() == 1 && self.card_groups[0].len() == 1{
-            return Err("Invalild single declaration".into());
-        }
-
-        if self.hand_card != self.card_groups[0][0] {
-            return Err("Buggy Client. The hand card should be the first card!".into());
-        }
-
-        let val = self.card_groups[0].iter().fold(0, |acc, x| acc + x.rank.0);
-        if val > 10 || val < 1 {
-            return Err(format!("Invalid declaration value: {}", val));
-        }
-
-
-        for g in self.card_groups[1..].iter() {
-            let val_g = g.iter().fold(0, |acc, x| acc + x.rank.0);
-            if val != val_g {
-                return Err(format!("Not equal group values: {} vs {}", val_g, val));
-            }
-        }
-
-        for decl in self.decl_groups.iter() {
-            if val != decl.value() {
-                return Err(format!("Not equal group values: {} vs {}", decl.value(), val));
-            }
-        }
-
-        Ok(())
-    }
-
-}
-
-#[test]
-fn pv_validation_tests() {
-}
