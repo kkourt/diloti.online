@@ -9,7 +9,7 @@ use std::clone::Clone;
 use super::deck::Deck;
 use super::card::Card;
 use super::table::{Table, Declaration, PlayerTpos, TableEntry};
-use super::actions::{PlayerAction, DeclAction};
+use super::actions::{PlayerAction, DeclAction, CaptureAction};
 
 use serde::{Deserialize, Serialize};
 
@@ -21,17 +21,6 @@ use serde::{Deserialize, Serialize};
 // "lost" when the game is played. The state of each card is implicit in which container it is
 // stored in.
 
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct RaiseAction {
-    pub hand_card: Card,
-    pub decl: Declaration,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TakeAction {
-    pub hand_card: Card,
-}
 
 #[derive(Clone, Debug)]
 pub struct Player {
@@ -211,13 +200,74 @@ impl<R: rand::Rng + Clone> Game<R> {
                 self.add_table_card(card);
             },
             PlayerAction::Declare(da) => self.do_apply_decl_action(tpos, &da)?,
-            PlayerAction::Capture(ca) => unimplemented!(),
+            PlayerAction::Capture(ca) => self.do_apply_capture_action(tpos, &ca)?,
         }
         self.next_turn();
         Ok(())
     }
 
+    fn decl_enforce_obligations(&mut self, da: &DeclAction, decl_cards: &mut Vec<Vec<Card>>) {
+        // NB: not sure if this is all of it, but for simplicity let's do the following:
+        // whenever there is a *new* declaration, then existing cards on the table with the same
+        // value are dragged in it.
+
+        // Not a new declaration, do nothing
+        if da.has_decl() {
+            return
+        }
+
+        let val = da.value();
+        while let Some(card) = self.table.remove_card_with_value(val) {
+            decl_cards.push(vec![card])
+        }
+
+    }
+
+    fn do_apply_capture_action(&mut self, tpos: PlayerTpos, ca: &CaptureAction) -> Result<(), String> {
+        let mut captured_cards : Vec<Card> = vec![];
+
+        let hand_card = self.remove_player_card(tpos, &ca.handcard).ok_or_else(|| "Hand card does not exist")?;
+        captured_cards.push(hand_card);
+
+        for te in ca.tentries.iter().flatten() {
+            match te {
+                TableEntry::Card(c) => {
+                    let table_card =  self.remove_table_card(&c).ok_or_else(|| "Table card does not exist")?;
+                    captured_cards.push(table_card);
+                },
+                TableEntry::Decl(d) => {
+                    let mut table_decl = self.remove_table_decl(&d).ok_or_else(|| "Table declaration does not exist")?;
+                    for c in table_decl.cards.drain(..).flatten() {
+                        captured_cards.push(c);
+                    }
+                },
+            }
+        }
+
+        // obligatory captures
+        let val = ca.value();
+        while let Some(te) = self.table.remove_entry_with_value(val) {
+            match te {
+                TableEntry::Card(c) => {
+                    captured_cards.push(c);
+                },
+                TableEntry::Decl(mut d) => {
+                    for c in d.cards.drain(..).flatten() {
+                        captured_cards.push(c);
+                    }
+                },
+            }
+        }
+
+
+        // TODO: captured_cards
+
+        Ok(())
+    }
+
     fn do_apply_decl_action(&mut self, tpos: PlayerTpos, da: &DeclAction) -> Result<(), String> {
+
+
         let mut decl_cards : Vec<Vec<Card>> = vec![];
         for (i, entries_v) in da.tentries.iter().enumerate() {
             let entries_v_len = entries_v.len();
@@ -267,6 +317,9 @@ impl<R: rand::Rng + Clone> Game<R> {
                 decl_cards.push(cards_v.drain(..).collect());
             }
         }
+
+
+        self.decl_enforce_obligations(da, &mut decl_cards);
 
         let decl = Declaration {
             cards: decl_cards,

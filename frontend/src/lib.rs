@@ -100,8 +100,32 @@ impl ToElem for core::TableEntry {
     }
 }
 
-
 impl ToElem for core::DeclActionBuilder {
+    fn to_elem(&self) -> Node<Msg> {
+        let mut span = span![];
+
+        if self.current.len() > 0 {
+            let curr = span![
+                // NB: Can we avoid the cloned here?
+                iter_to_elem("→", self.current.iter().cloned(), ""),
+                " "
+            ];
+            span.add_child(curr);
+        }
+
+        if self.action.tentries.len() > 0 {
+            for tev in self.action.tentries.iter() {
+                // NB: Can we avoid the cloned here?
+                let e = iter_to_elem(" (", tev.iter().cloned(), ") ");
+                span.add_child(e);
+            }
+        }
+
+        span
+    }
+}
+
+impl ToElem for core::CaptureActionBuilder {
     fn to_elem(&self) -> Node<Msg> {
         let mut span = span![];
 
@@ -634,7 +658,7 @@ enum TurnProgress {
     Nothing(Node<Msg>),
     CardSelected(usize),
     DeclaringWith(usize, Option<core::DeclActionBuilder>),
-    CapturingWith(usize, Option<core::CaptureActionBuilder>),
+    CapturingWith(usize, core::CaptureActionBuilder),
     ActionIssued(core::PlayerAction),
 }
 
@@ -668,9 +692,9 @@ impl GamePhase {
             MyTurn(Nothing(_)) => false,
             MyTurn(CardSelected(x)) => false,
             MyTurn(DeclaringWith(x, None)) => false,
-            MyTurn(DeclaringWith(x, Some(ds))) => ds.has_tentry(tentry),
+            MyTurn(DeclaringWith(x, Some(db))) => db.has_tentry(tentry),
             // TODO
-            MyTurn(CapturingWith(x,_)) => unimplemented!(),
+            MyTurn(CapturingWith(x, cb)) => cb.has_tentry(tentry),
         }
     }
 }
@@ -844,21 +868,31 @@ impl GameSt {
                     MyTurn(ActionIssued(_)) => None,
                     MyTurn(CardSelected(_)) => None,
                     MyTurn(DeclaringWith(cidx, None)) => None,
-                    MyTurn(DeclaringWith(cidx, Some(ds))) => {
+                    MyTurn(DeclaringWith(cidx, Some(db))) => {
                         if is_selected {
                             // NB: we could do something smarter here
-                            ds.reset()
+                            db.reset()
                         } else {
-                            let res = ds.add_table_entry(te);
+                            let res = db.add_table_entry(te);
                             if let Err(errstr) = res {
                                 self.tmp_error_msg = errstr;
                             }
                         }
-
                         None
                     },
                     // TODO
-                    MyTurn(CapturingWith(prev_x,_)) => None,
+                    MyTurn(CapturingWith(prev_x,cb)) => {
+                        if is_selected {
+                            // NB: we could do something smarter here
+                            cb.reset()
+                        } else {
+                            let res = cb.add_table_entry(te);
+                            if let Err(errstr) = res {
+                                self.tmp_error_msg = errstr;
+                            }
+                        }
+                        None
+                    },
                 };
 
                 if let Some(x) = new_phase {
@@ -876,13 +910,10 @@ impl GameSt {
             },
 
             InGameMsg::CaptureWith(cidx) => {
-                let cc = self.view.own_hand.cards[*cidx].clone();
-                unimplemented!()
-                /*
-                let action = core::PlayerAction::Capture(cc);
-                self.issue_action_validate(action);
+                let card = self.view.own_hand.cards[*cidx].clone();
+                let bld = core::CaptureActionBuilder::new(&card);
+                self.phase = GamePhase::MyTurn(TurnProgress::CapturingWith(*cidx, bld));
                 return None;
-                */
             },
 
             InGameMsg::DeclareWith(cidx) => {
@@ -921,6 +952,12 @@ impl GameSt {
                         self.issue_action(action);
                         return None;
                     },
+
+                    MyTurn(CapturingWith(cidx, cb)) => {
+                        let action = cb.make_action();
+                        self.issue_action(action);
+                        return None;
+                    }
 
                     _ => unimplemented!(),
                 };
@@ -1080,7 +1117,7 @@ impl GameSt {
             GamePhase::MyTurn(TurnProgress::Nothing(msg)) => msg.clone(),
             GamePhase::MyTurn(TurnProgress::CardSelected(cidx)) => self.view_selected_card(*cidx),
             GamePhase::MyTurn(TurnProgress::DeclaringWith(cidx, ts)) => self.view_declaration(*cidx, ts),
-            GamePhase::MyTurn(TurnProgress::CapturingWith(cidx, tsel)) => unimplemented!(),
+            GamePhase::MyTurn(TurnProgress::CapturingWith(cidx, cb)) => self.view_capture(*cidx, cb),
             GamePhase::MyTurn(TurnProgress::ActionIssued(a)) => p!["Issued action. Waiting for server."],
         };
         let mut phase = div![
@@ -1187,7 +1224,24 @@ impl GameSt {
         }
     }
 
+    fn view_capture(&self, cidx: usize, cb: &core::CaptureActionBuilder) -> Node<Msg> {
+        let card = &self.view.own_hand.cards[cidx];
+        let mut div = div![
+            p!["Capturing with ",
+               card.to_elem(),
+               format!(" (select cards from the table)"),
+            ],
+            p!["Selection: ", cb.to_elem()],
+        ];
 
+        if cb.is_ready() {
+            let msg = Msg::InGame(InGameMsg::FinalizePhase);
+            let done = button![simple_ev(Ev::Click, msg), "Play"];
+            div.add_child(done);
+        }
+
+        div
+    }
 }
 
 /// Demultiplexers

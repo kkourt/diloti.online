@@ -92,14 +92,16 @@ impl DeclRepr {
     }
 
     pub fn fmt_declaration(decl: &Declaration, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        write!(f, "{}:[", decl.player.0)?;
+        write!(f, "{}:", decl.player.0)?;
+        let cards_i = decl.cards.iter().peekable();
         for vcards in decl.cards.iter() {
+            write!(f, "[")?;
             for card in vcards.iter() {
                 write!(f, " {}", card)?;
             }
-            write!(f, " ][")?;
+            write!(f, " ]")?;
         }
-        write!(f, "]:")
+        write!(f, ":")
     }
 }
 
@@ -116,7 +118,7 @@ fn parse_decl_begin(s: &str) -> Option<PlayerTpos> {
 // NB: Yes, this is ugly! I first implemented the parsers as a struct, and then because it looked
 // too complex, I implemented them as functions.  At least for the decls, it seems that the best
 // option would be the struct, so we don't have to pass the iterator around, but I'll keep it like
-// this for now.  Live and learn I guess...
+// this for now.
 fn parse_decl_body<'a, I>(mut iter: I) -> (I,Option<Vec<Vec<Card>>>) where
     I: Iterator<Item=&'a str>,
 {

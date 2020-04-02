@@ -72,6 +72,13 @@ impl DeclAction {
         }
     }
 
+    pub fn has_decl(&self) -> bool {
+        self.tentries
+            .iter()
+            .flatten()
+            .find(|te| te.is_decl()).is_some()
+    }
+
     pub fn get_single_decl(&self) -> GetSingleRes<&Declaration> {
         let tentries: Vec<&TableEntry> = self.tentries
             .iter()
@@ -166,7 +173,37 @@ fn validate_laydown(card: Card, table: &Table) -> Result<(), String> {
 
 impl CaptureAction {
     pub fn validate(&self) -> Result<(), String> {
-        unimplemented!()
+        if (self.tentries.len() == 0) || (self.tentries[0].len() == 0) {
+            return Err("Invalid capture: empty".to_string());
+        }
+
+        if !self.same_value() {
+            return Err("Invalid capture: Not all groups have the same value".to_string());
+        }
+
+        for tvec in self.tentries.iter() {
+            if tvec.iter().find(|x| x.is_decl()).is_some()  && tvec.len() < 1 {
+                return Err("Invalid capture: declarations can only be captured alone".to_string());
+            }
+        }
+
+        Ok(())
+    }
+
+    pub fn value(&self) -> u8 {
+        self.handcard.rank.0
+    }
+
+    pub fn same_value(&self) -> bool {
+        let val = self.value();
+        for te_vec in self.tentries.iter() {
+            let val_g = te_vec.iter().fold(0, |acc, te| acc + te.value());
+            if val != val_g {
+                return false;
+            }
+        }
+
+        return true;
     }
 }
 
@@ -259,7 +296,7 @@ impl DeclActionBuilder {
             return false;
         }
 
-        // need at least one card from the table
+        // need at least one table entry
         if self.entries_set.len() == 0 {
             return false;
         }
@@ -323,4 +360,103 @@ impl DeclActionBuilder {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CaptureActionBuilder {
     pub action: CaptureAction,
+    pub current: Vec<TableEntry>,
+    pub entries_set: std::collections::HashSet<TableEntry>,
+}
+
+impl CaptureActionBuilder {
+
+    pub fn new(hcard: &Card) -> CaptureActionBuilder {
+        CaptureActionBuilder {
+            action: CaptureAction {
+                handcard: hcard.clone(),
+                tentries: vec![],
+            },
+            current: vec![],
+            entries_set: std::collections::HashSet::new(),
+        }
+    }
+
+    pub fn reset(&mut self) {
+        *self = CaptureActionBuilder::new(&self.action.handcard);
+    }
+
+    pub fn is_ready(&self) -> bool {
+        if self.current.len() != 0 {
+            return false;
+        }
+
+        // need at least one table entry
+        if self.action.tentries.len() == 0 {
+            return false;
+        }
+
+        true
+    }
+
+    fn current_value(&self) -> u8 {
+        self.current.iter().fold(0, |acc, x| acc + x.value())
+    }
+
+    pub fn add_table_entry(&mut self, tentry: &TableEntry) -> Result<(), String> {
+        let ret = self.do_add_table_entry(tentry);
+        if ret.is_ok() {
+            self.entries_set.insert(tentry.clone());
+        }
+
+        ret
+    }
+
+    pub fn has_tentry(&self, tentry: &TableEntry) -> bool {
+        self.entries_set.contains(tentry)
+    }
+
+    fn do_add_table_entry(&mut self, tentry: &TableEntry) -> Result<(), String> {
+        let handc = &self.action.handcard;
+        let val = self.action.value();
+        if handc.rank.is_figure() {
+            match tentry {
+                TableEntry::Card(c) if c.rank != handc.rank => Err(format!("You cannot capture {} with {}", c, handc)),
+                TableEntry::Decl(_) => Err("Cannot capture declarations with a figure".to_string()),
+                _ => Ok(())
+            }?;
+        }
+
+        match tentry {
+
+            TableEntry::Decl(tdecl) if self.current.len() == 0 && tdecl.value() == val => {
+                self.action.tentries.push(vec![tentry.clone()]);
+                Ok(())
+            }
+
+            TableEntry::Decl(tdecl) => {
+                Err("Declarations must be picked up on their own".to_string())
+            },
+
+            TableEntry::Card(tdecl) => {
+                let curr_val = self.current_value() + tentry.value();
+                if curr_val > val {
+                    Err("Cannot add entry to current declaration (it will exceed declared value)".to_string())
+                } else {
+                    self.current.push(tentry.clone());
+                    assert_eq!(self.current_value(), curr_val);
+                    if curr_val == val {
+                        let curr = self.current.drain(..).collect();
+                        self.action.tentries.push(curr);
+                    }
+                    Ok(())
+                }
+            }
+        }
+    }
+
+
+    fn make_capture_action(&self) -> CaptureAction {
+        assert!(self.is_ready());
+        self.action.clone()
+    }
+
+    pub fn make_action(&self) -> PlayerAction {
+        PlayerAction::Capture(self.make_capture_action())
+    }
 }

@@ -9,10 +9,10 @@ use super::card::Card;
 
 
 /// Player identifier based on their position on the table
-#[derive(Copy, Clone, PartialEq, Eq, Debug, Hash, Serialize, Deserialize)]
+#[derive(Copy, Clone, PartialEq, Eq, Debug, Hash, Ord, PartialOrd, Serialize, Deserialize)]
 pub struct PlayerTpos(pub u8);
 
-#[derive(Clone, Hash, PartialEq, Eq, Debug, Serialize, Deserialize)]
+#[derive(Clone, Hash, PartialEq, Eq, PartialOrd, Ord, Debug, Serialize, Deserialize)]
 pub struct Declaration {
     /// groups of cards
     pub cards: Vec<Vec<Card>>,
@@ -20,7 +20,7 @@ pub struct Declaration {
     pub player: PlayerTpos,
 }
 
-#[derive(Clone, Hash, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Hash, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum TableEntry {
     Card(Card),
     Decl(Declaration),
@@ -180,6 +180,11 @@ impl Table {
         })
     }
 
+    pub fn remove_card_with_value(&mut self, val: u8) -> Option<Card> {
+        let pos = self.entries.iter().position(|x| x.is_card() && x.value() == val)?;
+        Some(self.entries.remove(pos).unwrap_card())
+    }
+
     /// remove the first entry found with the given value, or return None if value does not exist
     pub fn remove_entry_with_value(&mut self, val: u8) -> Option<TableEntry> {
         let pos = self.entries.iter().position(|x| x.value() == val)?;
@@ -193,4 +198,3 @@ impl std::fmt::Display for PlayerTpos {
         write!(f, "P{}", pid)
     }
 }
-

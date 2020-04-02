@@ -9,7 +9,7 @@ use super::error as e;
 
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum Suit {
     /// ♠
     Spade,
@@ -21,11 +21,11 @@ pub enum Suit {
     Diamond,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct Rank(pub u8);
 
 /// Game card
-#[derive(PartialEq, Eq, Clone, Hash, Serialize, Deserialize)]
+#[derive(PartialEq, Eq, Clone, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct Card {
     pub suit: Suit,
     pub rank: Rank,
@@ -138,11 +138,13 @@ impl TryFrom<&str> for Card {
 
     /// suit first
     fn try_from(val: &str) -> Result<Card, e::Error> {
-        if val.len() != 2 {
+
+        let chars : Vec<_> = val.chars().collect();
+        if chars.len() != 2 {
             return Err(e::Error::InvalidStringLen);
         }
-        let suit = Suit::try_from(val.chars().nth(0).unwrap())?;
-        let rank = Rank::try_from(val.chars().nth(1).unwrap())?;
+        let suit = Suit::try_from(chars[0])?;
+        let rank = Rank::try_from(chars[1])?;
         Ok(Card{suit: suit, rank: rank})
     }
 }
