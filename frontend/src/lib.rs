@@ -14,7 +14,6 @@ use seed::{*, prelude::*};
 use wasm_bindgen::JsCast;
 
 use core;
-
 use core::srvcli;
 use core::srvcli::{CreateReq, CreateReqDebug, CreateRep, LobbyInfo, ClientMsg, ServerMsg, PlayerId};
 
@@ -59,6 +58,7 @@ impl ToElem for core::Card {
         span
     }
 }
+
 
 fn iter_to_elem<T: ToElem, I: Iterator<Item=T>>(start: &str, mut iter: I, end: &str) -> Node<Msg> {
     let mut span = span![span![start]];
@@ -150,6 +150,57 @@ impl ToElem for core::CaptureActionBuilder {
     }
 }
 
+impl ToElem for core::ScoreSheet {
+    fn to_elem(&self) -> Node<Msg> {
+        let details = if self.score == 0 { span![":-("] } else {
+            let mut nodes: Vec<Vec<Node<Msg>>> = vec![];
+            if self.has_the_cards() {
+                nodes.push(
+                    vec![
+                        span![format!("{} (cards: {})", core::scoring::NCARDS_SCORE, self.nr_cards)]
+                    ]
+                )
+            }
+
+            if self.nr_xeres > 0 {
+                nodes.push(
+                    vec![
+                        span![format!("{} ({} {})",
+                            self.nr_xeres*core::scoring::XERI_SCORE,
+                            self.nr_xeres,
+                            if self.nr_xeres == 1 {"ξερή"} else {"ξερές"},
+
+                        )]
+                    ]
+                )
+            }
+
+            for c in self.score_cards.iter() {
+                nodes.push(
+                    vec![
+                        span![format!("{} (", core::scoring::card_value(c))],
+                        c.to_elem(),
+                        span![")"],
+                    ]
+                )
+            }
+
+            let mut span = span![" ="];
+            let sep = vec![span![" + "]];
+            let mut joined = (&nodes[..]).join(&sep[..]);
+            for n in joined.drain(..) {
+                span.add_child(n);
+            }
+            span
+        };
+
+        span![
+            b![format!("{}", self.score)],
+            details,
+        ]
+    }
+}
+
 struct InitSt {
     /// Number of players
     nplayers: u8,
@@ -168,12 +219,17 @@ fn get_create_game_req_url() -> impl Into<std::borrow::Cow<'static, str>> {
 impl InitSt {
 
     fn mk_create_req(&self) -> CreateReq {
-        let mut ret = CreateReq {
-            nplayers: self.nplayers,
-            debug: Some(CreateReqDebug {
+
+        let debug = if self.nplayers == 1 {
+            Some(CreateReqDebug {
                 hand_s: self.debug_hand.clone(),
                 table_s: self.debug_table.clone(),
-            }),
+            })
+        } else { None };
+
+        let mut ret = CreateReq {
+            nplayers: self.nplayers,
+            debug: debug,
         };
 
         // verify that debug strings are correct
@@ -589,6 +645,7 @@ impl LobbySt {
                         let lobby_info : &LobbyInfo = self.lobby_info
                             .as_ref()
                             .expect("At this point, we should have received lobby info from the server");
+
                         return Some(Model::InGame(GameSt::new(self, pview)));
                     },
                     _ => panic!("Unexpected message: {:?}", srv_msg),
@@ -665,6 +722,8 @@ enum TurnProgress {
 enum GamePhase {
     MyTurn(TurnProgress),
     OthersTurn(PlayerId),
+    RoundDone,
+    GameDone(Vec<core::ScoreSheet>),
 }
 
 impl GamePhase {
@@ -679,6 +738,7 @@ impl GamePhase {
             MyTurn(DeclaringWith(x,_)) => Some(*x),
             MyTurn(CapturingWith(x,_)) => Some(*x),
             MyTurn(ActionIssued(_)) => None,
+            RoundDone | GameDone(_) => None,
         }
     }
 
@@ -693,8 +753,8 @@ impl GamePhase {
             MyTurn(CardSelected(x)) => false,
             MyTurn(DeclaringWith(x, None)) => false,
             MyTurn(DeclaringWith(x, Some(db))) => db.has_tentry(tentry),
-            // TODO
             MyTurn(CapturingWith(x, cb)) => cb.has_tentry(tentry),
+            RoundDone | GameDone(_) => false,
         }
     }
 }
@@ -702,19 +762,25 @@ impl GamePhase {
 impl From<(&LobbyInfo, &core::PlayerGameView)> for GamePhase {
     fn from(pieces: (&LobbyInfo, &core::PlayerGameView)) -> GamePhase {
         let (lobby_info, pview) = pieces;
-        let turn_tpos = pview.turn;
-        let self_tpos = lobby_info.players[lobby_info.self_id.0].tpos;
-        if self_tpos == turn_tpos {
-            let msg = p!["Your turn to play (select a card from your hand)"];
-            GamePhase::MyTurn(TurnProgress::Nothing(msg))
-        } else {
-            let turn_pid = lobby_info.players
-                .iter()
-                .enumerate()
-                .find( |(_, pi)| pi.tpos == turn_tpos)
-                .map( |(i,_)| i)
-                .unwrap();
-            GamePhase::OthersTurn(srvcli::PlayerId(turn_pid))
+        match pview.state {
+
+            core::GameState::NextTurn(tpos) if tpos == lobby_info.my_tpos() => {
+                let msg = p!["Your turn to play (select a card from your hand)"];
+                GamePhase::MyTurn(TurnProgress::Nothing(msg))
+            },
+
+            core::GameState::NextTurn(tpos) => {
+                let pid = lobby_info.player_id_from_tpos(tpos).unwrap();
+                GamePhase::OthersTurn(pid)
+            },
+
+            core::GameState::RoundDone => {
+                GamePhase::RoundDone
+            },
+
+            core::GameState::GameDone(ref sheets)  => {
+                GamePhase::GameDone(sheets.clone())
+            },
         }
     }
 }
@@ -851,6 +917,8 @@ impl GameSt {
                     MyTurn(CapturingWith(prev_x,_)) => {
                         Some(MyTurn(CardSelected(*x)))
                     },
+
+                    RoundDone | GameDone(_) => None,
                 };
 
                 if let Some(x) = new_phase {
@@ -868,6 +936,7 @@ impl GameSt {
                     MyTurn(ActionIssued(_)) => None,
                     MyTurn(CardSelected(_)) => None,
                     MyTurn(DeclaringWith(cidx, None)) => None,
+
                     MyTurn(DeclaringWith(cidx, Some(db))) => {
                         if is_selected {
                             // NB: we could do something smarter here
@@ -880,7 +949,7 @@ impl GameSt {
                         }
                         None
                     },
-                    // TODO
+
                     MyTurn(CapturingWith(prev_x,cb)) => {
                         if is_selected {
                             // NB: we could do something smarter here
@@ -893,6 +962,8 @@ impl GameSt {
                         }
                         None
                     },
+
+                    RoundDone | GameDone(_) => None,
                 };
 
                 if let Some(x) = new_phase {
@@ -978,7 +1049,8 @@ impl GameSt {
                 return None;
             },
 
-            _ => unimplemented!()
+            _ => unimplemented!(),
+
         }
     }
 
@@ -1119,6 +1191,8 @@ impl GameSt {
             GamePhase::MyTurn(TurnProgress::DeclaringWith(cidx, ts)) => self.view_declaration(*cidx, ts),
             GamePhase::MyTurn(TurnProgress::CapturingWith(cidx, cb)) => self.view_capture(*cidx, cb),
             GamePhase::MyTurn(TurnProgress::ActionIssued(a)) => p!["Issued action. Waiting for server."],
+            GamePhase::GameDone(sheets) => self.view_score(sheets),
+            GamePhase::RoundDone => p!["Round done! Wait for new cards."],
         };
         let mut phase = div![
             attrs!{At::Class => "container"},
@@ -1130,6 +1204,20 @@ impl GameSt {
         }
 
         div![table, hand, phase]
+    }
+
+    fn view_score(&self, sheets: &Vec<core::ScoreSheet>) -> Node<Msg> {
+        let mut div = div![ p![format!("Game done!")] ];
+        assert!(sheets.len() == self.lobby_info.nteams());
+        for (i,ss) in sheets.iter().enumerate() {
+            let p = p![
+                format!("Team T{} ({}) score: ", i, self.lobby_info.team_players(i).join(", ")),
+                ss.to_elem()
+            ];
+            div.add_child(p);
+        }
+
+        div
     }
 
     fn view_selected_card(&self, cidx: usize) -> Node<Msg> {

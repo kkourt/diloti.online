@@ -62,14 +62,6 @@ pub struct LobbyInfo {
  */
 
 
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct GameInfo(pub game::PlayerGameView);
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct GameEndInfo { }
-
-
 /**
  * Message types
  */
@@ -79,7 +71,6 @@ pub enum ServerMsg {
     InLobby(LobbyInfo),
     GameUpdate(game::PlayerGameView),
     InvalidAction(String),
-    GameEnd(GameEndInfo),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -120,5 +111,44 @@ impl CreateReq {
 impl LobbyInfo {
     pub fn player_from_tpos(&self, tpos: PlayerTpos) -> Option<&PlayerInfo> {
        self.players.iter().find( |pi| pi.tpos == tpos)
+    }
+
+    pub fn my_tpos(&self) -> PlayerTpos {
+        self.players[self.self_id.0].tpos
+    }
+
+    pub fn player_id_from_tpos(&self, tpos: PlayerTpos) -> Option<PlayerId> {
+        self.players
+            .iter()
+            .enumerate()
+            .find( |(_, pi)| pi.tpos == tpos)
+            .map( |(i,_)| PlayerId(i) )
+    }
+
+    pub fn nteams(&self) -> usize {
+        match self.nplayers {
+            1 => 1,
+            2 | 4 => 2,
+            _ => panic!("invalid number of players"),
+        }
+    }
+
+    pub fn team_players(&self, i: usize) -> Vec<String> {
+        match (self.nplayers, i) {
+            (1, 0) => vec![self.player_from_tpos(PlayerTpos(0)).unwrap().name.clone()],
+
+            (2, 0) => vec![self.player_from_tpos(PlayerTpos(0)).unwrap().name.clone()],
+            (2, 1) => vec![self.player_from_tpos(PlayerTpos(1)).unwrap().name.clone()],
+
+            (4, 0) => vec![
+                self.player_from_tpos(PlayerTpos(0)).unwrap().name.clone(),
+                self.player_from_tpos(PlayerTpos(2)).unwrap().name.clone(),
+            ],
+            (4, 1) => vec![
+                self.player_from_tpos(PlayerTpos(1)).unwrap().name.clone(),
+                self.player_from_tpos(PlayerTpos(3)).unwrap().name.clone(),
+            ],
+            _ => panic!("Unexpected number of players/teams"),
+        }
     }
 }

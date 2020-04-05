@@ -141,6 +141,28 @@ impl TableEntry {
 }
 
 impl Table {
+    pub fn nentries(&self) -> usize {
+        return self.entries.len();
+    }
+
+    // NB: spend some time trying to build something that returns Iterator<Item=Card> without
+    // specyfing all the types, but failed. Maybe revisit this...
+    pub fn remove_all_cards(&mut self) -> Vec<Card> {
+        let mut ret = vec![];
+        for te in self.entries.drain(..) {
+            match te {
+                TableEntry::Card(c) => ret.push(c),
+                TableEntry::Decl(mut d) => {
+                    for c in d.cards.drain(..).flatten() {
+                        ret.push(c)
+                    }
+                }
+            }
+        }
+
+        ret
+    }
+
     pub fn remove_card(&mut self, arg: &Card) -> Option<Card> {
         let idx = self.entries.iter().position(|e| {
             match e {

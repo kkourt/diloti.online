@@ -34,20 +34,26 @@ pub struct GameConfig {
     pub debug: Option<GameDebug>,
 }
 
+
 struct Player {
-    player_info: srvcli::PlayerInfo,
+    player_info: srvcli::PlayerInfo, // players referenced by player id
     tx: PlayerTaskTx,
 }
 
-#[derive(Debug)]
-pub struct GameScore;
-
+#[derive(Debug, Clone)]
 enum State {
     InLobby,
     InGame,
-    GameEnd,
     Error(String),
 }
+
+// NB:
+// - backend::game::Game players are referenced by PlayerId
+// - core::game::Game players are referenced by PlayerTpos
+//
+// PlayerId is assigned by the game task when a client joins, whule playertops is their location on
+// the table that determines teams, player order, etc.
+
 
 struct Game {
     players: Vec<Player>, // player players[0] is admin
@@ -57,6 +63,8 @@ struct Game {
     state: State,
     curr_game: core::Game<Rng>,
     nplayers: u8,
+
+    nteams: u8,
 }
 
 impl Game {
@@ -70,7 +78,13 @@ impl Game {
             (4, None)       => core::Game::new_4p(rng),
             (x, None)       => panic!("Incorrect number of players: {:?}", x),
             (1, Some(dbg))  => core::Game::new_1p_debug(rng, dbg.table, dbg.hand),
-            (x, _)          => panic!("Debuging mode allowed only for single player (for now)."),
+            (x, _)          => panic!("Debugging mode allowed only for single player (for now)."),
+        };
+
+        let nteams = match cfg.nplayers {
+            2 | 4 => 2,
+            1     => 1,
+            _ => panic!("Unexepcted number of players"),
         };
 
         Game {
@@ -81,6 +95,7 @@ impl Game {
             state: State::InLobby,
             curr_game: game,
             nplayers: nplayers,
+            nteams: nteams,
         }
     }
 
@@ -163,7 +178,7 @@ impl Game {
                 }
             },
 
-            _ => unimplemented!(),
+            State::Error(_) => unimplemented!(),
         }
     }
 
@@ -210,53 +225,66 @@ impl Game {
         self.players.len() == self.nplayers as usize
     }
 
+    async fn apply_action(&mut self, pid: srvcli::PlayerId, action: core::PlayerAction) {
+        let tpos = self.player_tpos(pid);
+        let pview = self.curr_game.get_player_game_view(tpos);
+        let player = self.get_player_mut(pid);
+
+        // validate action
+        if let Err(errmsg) = action.validate(&pview) {
+            let msg = srvcli::ServerMsg::InvalidAction(errmsg);
+            self.send_msg_to_pid(pid, msg).await;
+            return;
+        }
+
+        let res = self.curr_game.apply_action(tpos, action);
+        if let Err(errmsg) = res {
+            log::error!("Error applying action evern after validation succeeded: {}", errmsg);
+            let msg = srvcli::ServerMsg::InvalidAction(errmsg);
+            self.send_msg_to_pid(pid, msg).await;
+            return;
+        }
+
+        // action was applied successfully
+        let newgame = res.unwrap();
+        self.curr_game = newgame;
+
+        match self.curr_game.state() {
+            core::GameState::NextTurn(_) => (),
+            core::GameState::GameDone(_) => (),
+            core::GameState::RoundDone => self.curr_game.new_round(),
+        }
+
+        self.send_info_to_players().await;
+    }
+
     async fn handle_clireq(&mut self, pid: srvcli::PlayerId, climsg: srvcli::ClientMsg) {
-        match self.state {
+        use State::{InLobby, InGame};
+        use srvcli::ClientMsg::{StartGame, PlayerAction};
 
-            State::InLobby => match climsg {
-                srvcli::ClientMsg::StartGame => {
-                    if !self.is_player_admin(pid) {
-                        log::error!("Non-admin player attempted to start game");
-                        return;
-                    }
-
-                    if !self.players_ready() {
-                        log::error!("admin attempted to start game but players are not ready");
-                        return;
-                    }
-
-                    self.state = State::InGame;
-                    self.send_info_to_players().await;
+        match (self.state.clone(), climsg) {
+            (InLobby, StartGame) => {
+                if !self.is_player_admin(pid) {
+                    log::error!("Non-admin player attempted to start game");
+                    return;
                 }
 
-                srvcli::ClientMsg::PlayerAction(action) => unimplemented!(),
+                if !self.players_ready() {
+                    log::error!("admin attempted to start game but players are not ready");
+                    return;
+                }
+
+                self.state = State::InGame;
+                self.send_info_to_players().await;
             },
 
-            State::InGame => match climsg {
-                srvcli::ClientMsg::StartGame => unimplemented!(),
-                srvcli::ClientMsg::PlayerAction(action) => {
-                    let tpos = self.player_tpos(pid);
-                    let pview = self.curr_game.get_player_game_view(tpos);
-                    let player = self.get_player_mut(pid);
+            (InGame, PlayerAction(action)) => {
+                self.apply_action(pid, action).await;
+            },
 
-                    if let Err(errmsg) = action.validate(&pview) {
-                        let msg = srvcli::ServerMsg::InvalidAction(errmsg);
-                        self.send_msg_to_pid(pid, msg).await;
-                    } else {
-                        let res = self.curr_game.apply_action(tpos, action);
-                        match res {
-                            Err(x) => unimplemented!(), // TODO: send error message to clients
-                            Ok(g) => self.curr_game = g,
-                        }
-
-                        self.send_info_to_players().await;
-                    }
-
-                }
-            }
-
-            _ => unimplemented!(),
+            (st, msg) => log::error!("Received message: {:?} from client while state is {:?}. Ignoring.", msg, st),
         }
+
     }
 
     async fn task_init(&mut self, rep_tx: oneshot::Sender<srvcli::CreateRep>) {

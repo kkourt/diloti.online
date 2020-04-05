@@ -6,49 +6,43 @@
 
 use std::clone::Clone;
 
+use serde::{Deserialize, Serialize};
+
 use super::deck::Deck;
 use super::card::Card;
 use super::table::{Table, Declaration, PlayerTpos, TableEntry};
 use super::actions::{PlayerAction, DeclAction, CaptureAction};
+use super::scoring::{Captures, ScoreSheet};
 
-use serde::{Deserialize, Serialize};
 
-// Rules:
+// Rules: we are using a variant where:
+//  - if a card can be added to a new declaration, it is automatically added (even if the player
+//  does not state it)
+//  - Capturing captures all cards and declarations on the table with the same value.
+//
+// Extended rules:
+//  - https://www.pagat.com/fishing/diloti.html
 //  - https://cardgamesgr.blogspot.com/2014/07/diloti.html
 //  - http://alogomouris.blogspot.com/2011/02/blog-post_5755.html
 
-// Design: we move card arounds. Add a custom destructor in the card to check that no card is
-// "lost" when the game is played. The state of each card is implicit in which container it is
-// stored in.
+// Design notes: we move card arounds. The state of each card is implicit in which container it is
+// stored in. I wanted to avoid "copying" the cards between server and client. The two solutions I
+// came up with were: i) use indices and a global version for the game, ii) use "card copies" that
+// have the same contents as the cards but a different types that can be cloned. To simplify
+// things, however, I ended just copying Cards for now. Also, users send the server all the cards
+// when they want to designate a declaration on the table which can be optimized in future
+// versions.
 
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Player {
     pub hand: Deck,
 }
 
-#[derive(Clone, Debug)]
-pub struct Game<R: rand::Rng + Clone> {
-    pub(crate) table: Table,
-    pub(crate) main_deck: Deck,
-    pub(crate) players: Vec<Player>,
-
-    pub(crate) turn: PlayerTpos,
-
-    rng: R,
-}
-
-
-/// This a player's point of view of the game
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PlayerGameView {
-    pub pid: PlayerTpos,
-    pub table: Table,
-    pub own_hand: Deck,
-    pub turn: PlayerTpos,
-
-    pub main_deck_sz: usize,
-    pub player_decks_sz: Vec<usize>,
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Team {
+    pub captures: Captures,
+    pub score: usize,
 }
 
 // Some terminology:
@@ -60,10 +54,39 @@ pub struct PlayerGameView {
 //
 // NB: (52 - 4) / 6 = 8, so there are 4 rounds on a 4-player game and 8 rounds on a 2 player game
 //
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum GameState {
-    NextPlayer(PlayerTpos),
+    NextTurn(PlayerTpos),
     RoundDone,
-    GameDone,
+    GameDone(Vec<ScoreSheet>),
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Game<R: rand::Rng + Clone> {
+    pub(crate) table: Table,
+    pub(crate) main_deck: Deck,
+    pub(crate) players: Vec<Player>,
+
+    pub(crate) teams: Vec<Team>,
+    pub(crate) last_team_captured: usize,
+
+    pub(crate) state: GameState,
+    pub (crate) first_player: PlayerTpos,
+
+    rng: R,
+}
+
+
+/// This a player's point of view of the game
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PlayerGameView {
+    pub pid: PlayerTpos,
+    pub table: Table,
+    pub own_hand: Deck,
+    pub state: GameState,
+
+    pub main_deck_sz: usize,
+    pub player_decks_sz: Vec<usize>,
 }
 
 impl<R: rand::Rng + Clone> Game<R> {
@@ -76,13 +99,17 @@ impl<R: rand::Rng + Clone> Game<R> {
         let players = vec![
             Player { hand: hand },
         ];
+        let first_p = PlayerTpos(0);
 
         Game {
             table: table,
             main_deck: Deck::empty(),
             players: players,
-            turn: PlayerTpos(0),
+            first_player: first_p,
+            state: GameState::NextTurn(first_p),
             rng: rng,
+            teams: vec![Team::default()],
+            last_team_captured: 0, // NB: technically not true
         }
     }
 
@@ -94,37 +121,74 @@ impl<R: rand::Rng + Clone> Game<R> {
         Self::init(4, rng)
     }
 
-
     fn init(nplayers: usize, rng: R) -> Game<R> {
         assert!(nplayers == 1 || nplayers == 2 || nplayers == 4);
+        let nteams = if nplayers == 1 { 1 } else { 2 };
 
         let deck = Deck::full_52();
+        let first_player = PlayerTpos(0);
 
         let mut game = Game {
             table: Table { entries: vec![] },
             main_deck: deck,
             players: (0..nplayers).map( |_i| Player { hand: Deck::empty() } ).collect(),
-            turn: PlayerTpos(0),
+            first_player: first_player,
+            state: GameState::NextTurn(first_player),
             rng: rng,
+            teams: (0..nteams).map( |_| Team::default()).collect(),
+            last_team_captured: 0,
         };
 
-        game.deal();
+        game.shuffle_deck();
+        game.deal_hands();
+        game.deal_table();
         game
     }
 
-    fn deal(&mut self) {
-        let hand_size = 6;
-        let table_size = 4;
+    fn team_idx(&mut self, tpos: PlayerTpos) -> usize {
+        let idx = (tpos.0 % 2) as usize;
+        assert!(idx < self.teams.len());
+        idx
+    }
 
+    fn update_captures(&mut self, tpos: PlayerTpos, captured_cards: Vec<Card>) {
+        let idx = self.team_idx(tpos);
+        let is_xeri = self.table.nentries() == 0;
+        self.teams[idx].captures.add_cards(captured_cards, is_xeri);
+        self.last_team_captured = idx;
+    }
+
+    fn finalize_captures(&mut self) {
+        let idx = self.last_team_captured;
+        let cards = self.table.remove_all_cards();
+        let is_xeri = false;
+        self.teams[idx].captures.add_cards(cards, is_xeri);
+    }
+
+    fn shuffle_deck(&mut self) {
         self.main_deck.shuffle(&mut self.rng);
+    }
 
+    pub fn new_round(&mut self) {
+        assert!(self.state.is_round_done());
+        self.deal_hands();
+        self.state = GameState::NextTurn(self.first_player);
+    }
+
+    pub fn deal_hands(&mut self) {
+        assert!(self.all_players_done());
+        assert!(self.main_deck.ncards() > 0);
+        let hand_size = 6;
         for _ in 0..hand_size {
             for p in 0..self.players.len() {
                 let card = self.main_deck.pop().unwrap();
                 self.players[p].hand.push(card)
             }
         }
+    }
 
+    fn deal_table(&mut self) {
+        let table_size = 4;
         for _ in 0..table_size {
             let card = self.main_deck.pop().unwrap();
             self.table.entries.push(TableEntry::Card(card));
@@ -167,28 +231,62 @@ impl<R: rand::Rng + Clone> Game<R> {
             pid: pid,
             table: self.table.clone(),
             own_hand: self.players[pid.0 as usize].hand.clone(),
-            turn: self.turn,
+            state: self.state.clone(),
 
             main_deck_sz: self.main_deck.ncards(),
             player_decks_sz: self.players.iter().map(|p| p.hand.ncards()).collect(),
         }
     }
 
+    pub fn all_players_done(&self) -> bool {
+        self.players.iter().all(|p| p.hand.ncards() == 0)
+    }
+
     fn next_turn(&mut self) {
-        let nplayers = self.players.len() as u8;
-        self.turn = PlayerTpos( (self.turn.0 + 1) % nplayers);
+        if let GameState::NextTurn(curr_tpos) = self.state {
+            let nplayers = self.players.len() as u8;
+            let next_tpos = PlayerTpos((curr_tpos.0 + 1) % nplayers);
+            if self.get_player(next_tpos).unwrap().hand.ncards() > 0 {
+                self.state = GameState::NextTurn(next_tpos);
+            } else if self.main_deck.ncards() > 0 {
+                assert!(self.all_players_done());
+                self.state = GameState::RoundDone;
+            } else {
+                assert!(self.all_players_done());
+                self.finalize_captures();
+                let mut sheets = vec![];
+                for team in self.teams.iter_mut() {
+                    sheets.push(team.update_score())
+                }
+                self.state = GameState::GameDone(sheets);
+            }
+        } else {
+            panic!("Invalid call of next_turn()")
+        }
     }
 
     pub fn apply_action(&self, tpos: PlayerTpos, action: PlayerAction) -> Result<Self, String> {
-        // poor man's transaction
+        // poor man's transaction: we copy everything, try to apply the action, and then either
+        // return an error or the new state. This is because any errors during action application
+        // could leave the game in an incosistent state. It should be possible to ensure
+        // that there are no errors by doing a perfect validation, but we do not do this
+        // currently.
         let mut new = self.clone();
         new.do_apply_action(tpos, action)?;
+        new.next_turn();
         Ok(new)
+    }
+
+    pub fn state(&self) -> &GameState {
+        return &self.state
+    }
+
+    pub fn score(&self) -> Vec<ScoreSheet> {
+        self.teams.iter().map(|x| x.captures.score()).collect()
     }
 
     // NB: In case of an error, state might be incosistent.
     fn do_apply_action(&mut self, tpos: PlayerTpos, action: PlayerAction) -> Result<(), String> {
-
         {
             let pview = self.get_player_game_view(tpos);
             action.validate(&pview)?
@@ -202,7 +300,6 @@ impl<R: rand::Rng + Clone> Game<R> {
             PlayerAction::Declare(da) => self.do_apply_decl_action(tpos, &da)?,
             PlayerAction::Capture(ca) => self.do_apply_capture_action(tpos, &ca)?,
         }
-        self.next_turn();
         Ok(())
     }
 
@@ -259,8 +356,8 @@ impl<R: rand::Rng + Clone> Game<R> {
             }
         }
 
-
-        // TODO: captured_cards
+        // update scoring structures
+        self.update_captures(tpos, captured_cards);
 
         Ok(())
     }
@@ -318,7 +415,6 @@ impl<R: rand::Rng + Clone> Game<R> {
             }
         }
 
-
         self.decl_enforce_obligations(da, &mut decl_cards);
 
         let decl = Declaration {
@@ -329,6 +425,7 @@ impl<R: rand::Rng + Clone> Game<R> {
         self.add_table_decl(decl);
         Ok(())
     }
+
 }
 
 impl Player {
@@ -369,7 +466,37 @@ impl PlayerGameView {
     }
 
     pub fn is_my_turn(&self) -> bool {
-        return self.turn == self.pid;
+        match self.state {
+            GameState::NextTurn(pid) if pid == self.pid => true,
+            _ => false,
+        }
     }
 }
 
+
+impl Default for Team {
+    fn default() -> Self {
+        Team {
+            captures: Captures::new(),
+            score: 0,
+        }
+    }
+}
+
+impl GameState {
+    pub fn is_round_done(&self) -> bool {
+        match self {
+            GameState::RoundDone => true,
+            _ => false,
+        }
+    }
+}
+
+impl Team {
+    pub fn update_score(&mut self) -> ScoreSheet {
+        let sheet = self.captures.score();
+        self.score += sheet.score;
+        self.captures = Captures::new();
+        sheet
+    }
+}
