@@ -19,7 +19,7 @@ use core::srvcli::{CreateReq, CreateReqDebug, CreateRep, LobbyInfo, ClientMsg, S
 
 type XRng = rand_pcg::Pcg64;
 
-const DEFAULT_NR_PLAYERS: u8 = 1;
+const DEFAULT_NR_PLAYERS: u8 = 2;
 
 pub fn hand_from_string(s: &str) -> Option<core::Deck> {
     let mut vec : Vec<core::Card> = vec![];
@@ -1158,7 +1158,7 @@ impl GameSt {
 
             div![
                 attrs!{At::Class => "container"},
-                p!["Table"],
+                p![format!("Table (total: {} -- You might have to scroll down)", self.view.table.nentries())],
                 div![ attrs!{At::Class => "table"},  entries ],
             ]
         };
@@ -1177,7 +1177,8 @@ impl GameSt {
 
             div![
                 attrs!{At::Class => "container"},
-                p!["Hand"],
+                //p!["Hand"],
+                p![format!("Hand (total: {} -- You might have to scroll down)", self.view.own_hand.ncards())],
                 div![ attrs!{At::Class => "hand"}, cards],
             ]
         };

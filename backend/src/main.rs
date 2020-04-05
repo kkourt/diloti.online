@@ -173,7 +173,7 @@ async fn main() {
 
 
     let routes = index_r.or(pkg_r).or(hello_r).or(create_r).or(connect_r).with(log);
-    let sockaddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 8080);
+    let sockaddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)), 8080);
 
     warp::serve(routes).run(sockaddr).await;
 }
