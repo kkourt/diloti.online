@@ -8,14 +8,23 @@ use serde::{Deserialize, Serialize};
 
 use super::card::Card;
 use super::deck::Deck;
-use super::table::{Table, TableEntry, Declaration};
-use super::game::PlayerGameView;
+use super::table::{Table, TableEntry, Declaration, PlayerTpos};
+use super::game::{PlayerGameView};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum PlayerAction {
     LayDown(Card),
     Declare(DeclAction),
     Capture(CaptureAction),
+}
+
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PerformedAction {
+    pub action: PlayerAction,
+    pub player: PlayerTpos,
+    pub forced_cards: Vec<Card>,
+    pub xeri: bool,
 }
 
 // NB: by convention, the first card is the handcard stored as a TableEntry
@@ -92,6 +101,14 @@ impl DeclAction {
             1 => GetSingleRes::OnlyOne(tentries[0].ref_decl()),
             2 => GetSingleRes::MoreThanOne,
             _ => panic!("Unexpected"),
+        }
+    }
+
+    pub fn get_decl(&self) -> Option<Declaration> {
+        match self.get_single_decl() {
+            GetSingleRes::Zero => None,
+            GetSingleRes::OnlyOne(d) => Some(d.clone()),
+            GetSingleRes::MoreThanOne => panic!("Invalid decl"),
         }
     }
 
@@ -205,7 +222,26 @@ impl CaptureAction {
 
         return true;
     }
+
+    // NB: Build an iterator for this...
+    pub fn get_table_cards(&self) -> Vec<Card> {
+        let mut ret = vec![];
+        let iter = self.tentries.iter().flatten();
+        for te in iter {
+            match te {
+                TableEntry::Card(c) => ret.push(c.clone()),
+                TableEntry::Decl(d) => {
+                    for c in d.cards.iter().flatten() {
+                        ret.push(c.clone())
+                    }
+                }
+            }
+        }
+
+        ret
+    }
 }
+
 
 impl PlayerAction {
 
@@ -459,4 +495,7 @@ impl CaptureActionBuilder {
     pub fn make_action(&self) -> PlayerAction {
         PlayerAction::Capture(self.make_capture_action())
     }
+}
+
+impl PerformedAction {
 }

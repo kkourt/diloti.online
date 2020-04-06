@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use super::deck::Deck;
 use super::card::Card;
 use super::table::{Table, Declaration, PlayerTpos, TableEntry};
-use super::actions::{PlayerAction, DeclAction, CaptureAction};
+use super::actions::{PlayerAction, DeclAction, CaptureAction, PerformedAction};
 use super::scoring::{Captures, ScoreSheet};
 
 
@@ -73,6 +73,8 @@ pub struct Game<R: rand::Rng + Clone> {
     pub(crate) state: GameState,
     pub (crate) first_player: PlayerTpos,
 
+    pub(crate) last_action: Option<PerformedAction>,
+
     rng: R,
 }
 
@@ -85,6 +87,7 @@ pub struct PlayerGameView {
     pub own_hand: Deck,
     pub state: GameState,
 
+    pub last_action: Option<PerformedAction>,
     pub main_deck_sz: usize,
     pub player_decks_sz: Vec<usize>,
 }
@@ -110,6 +113,7 @@ impl<R: rand::Rng + Clone> Game<R> {
             rng: rng,
             teams: vec![Team::default()],
             last_team_captured: 0, // NB: technically not true
+            last_action: None,
         }
     }
 
@@ -137,6 +141,7 @@ impl<R: rand::Rng + Clone> Game<R> {
             rng: rng,
             teams: (0..nteams).map( |_| Team::default()).collect(),
             last_team_captured: 0,
+            last_action: None,
         };
 
         game.shuffle_deck();
@@ -162,7 +167,7 @@ impl<R: rand::Rng + Clone> Game<R> {
         let idx = self.last_team_captured;
         let cards = self.table.remove_all_cards();
         let is_xeri = false;
-        self.teams[idx].captures.add_cards(cards, is_xeri);
+        self.teams[idx].captures.add_final_cards(cards, is_xeri);
     }
 
     fn shuffle_deck(&mut self) {
@@ -232,6 +237,7 @@ impl<R: rand::Rng + Clone> Game<R> {
             table: self.table.clone(),
             own_hand: self.players[pid.0 as usize].hand.clone(),
             state: self.state.clone(),
+            last_action: self.last_action.clone(),
 
             main_deck_sz: self.main_deck.ncards(),
             player_decks_sz: self.players.iter().map(|p| p.hand.ncards()).collect(),
@@ -272,7 +278,8 @@ impl<R: rand::Rng + Clone> Game<R> {
         // that there are no errors by doing a perfect validation, but we do not do this
         // currently.
         let mut new = self.clone();
-        new.do_apply_action(tpos, action)?;
+        let performed_act = new.do_apply_action(tpos, action)?;
+        new.last_action = Some(performed_act);
         new.next_turn();
         Ok(new)
     }
@@ -286,7 +293,7 @@ impl<R: rand::Rng + Clone> Game<R> {
     }
 
     // NB: In case of an error, state might be incosistent.
-    fn do_apply_action(&mut self, tpos: PlayerTpos, action: PlayerAction) -> Result<(), String> {
+    fn do_apply_action(&mut self, tpos: PlayerTpos, action: PlayerAction) -> Result<PerformedAction, String> {
         {
             let pview = self.get_player_game_view(tpos);
             action.validate(&pview)?
@@ -296,31 +303,41 @@ impl<R: rand::Rng + Clone> Game<R> {
             PlayerAction::LayDown(c) => {
                 let card = self.remove_player_card(tpos, &c).ok_or_else(|| "Card does not exist")?;
                 self.add_table_card(card);
+                Ok(PerformedAction {
+                    action: PlayerAction::LayDown(c),
+                    player: tpos,
+                    forced_cards: vec![],
+                    xeri: false,
+                })
             },
-            PlayerAction::Declare(da) => self.do_apply_decl_action(tpos, &da)?,
-            PlayerAction::Capture(ca) => self.do_apply_capture_action(tpos, &ca)?,
+            PlayerAction::Declare(da) => self.do_apply_decl_action(tpos, da),
+            PlayerAction::Capture(ca) => self.do_apply_capture_action(tpos, ca),
         }
-        Ok(())
     }
 
-    fn decl_enforce_obligations(&mut self, da: &DeclAction, decl_cards: &mut Vec<Vec<Card>>) {
+    /// enforce obligations on a declaration
+    fn decl_enforce_obligations(&mut self, da: &DeclAction, decl_cards: &mut Vec<Vec<Card>>) -> Vec<Card> {
         // NB: not sure if this is all of it, but for simplicity let's do the following:
         // whenever there is a *new* declaration, then existing cards on the table with the same
         // value are dragged in it.
+        let mut ret: Vec<Card> = vec![];
 
         // Not a new declaration, do nothing
         if da.has_decl() {
-            return
+            return ret;
         }
 
         let val = da.value();
         while let Some(card) = self.table.remove_card_with_value(val) {
+            ret.push(card.clone());
             decl_cards.push(vec![card])
         }
 
+        ret
+
     }
 
-    fn do_apply_capture_action(&mut self, tpos: PlayerTpos, ca: &CaptureAction) -> Result<(), String> {
+    fn do_apply_capture_action(&mut self, tpos: PlayerTpos, ca: CaptureAction) -> Result<PerformedAction, String> {
         let mut captured_cards : Vec<Card> = vec![];
 
         let hand_card = self.remove_player_card(tpos, &ca.handcard).ok_or_else(|| "Hand card does not exist")?;
@@ -343,26 +360,36 @@ impl<R: rand::Rng + Clone> Game<R> {
 
         // obligatory captures
         let val = ca.value();
+        let mut forced_cards = vec![];
         while let Some(te) = self.table.remove_entry_with_value(val) {
             match te {
                 TableEntry::Card(c) => {
-                    captured_cards.push(c);
+                    forced_cards.push(c);
+                    //captured_cards.push(c);
                 },
                 TableEntry::Decl(mut d) => {
                     for c in d.cards.drain(..).flatten() {
-                        captured_cards.push(c);
+                        forced_cards.push(c);
+                        //captured_cards.push(c);
                     }
                 },
             }
         }
+        captured_cards.extend_from_slice(&forced_cards[..]);
 
         // update scoring structures
         self.update_captures(tpos, captured_cards);
+        let xeri = self.table.nentries() == 0;
 
-        Ok(())
+        Ok(PerformedAction {
+            action: PlayerAction::Capture(ca),
+            player: tpos,
+            forced_cards: forced_cards,
+            xeri: xeri,
+        })
     }
 
-    fn do_apply_decl_action(&mut self, tpos: PlayerTpos, da: &DeclAction) -> Result<(), String> {
+    fn do_apply_decl_action(&mut self, tpos: PlayerTpos, da: DeclAction) -> Result<PerformedAction, String> {
 
 
         let mut decl_cards : Vec<Vec<Card>> = vec![];
@@ -415,15 +442,20 @@ impl<R: rand::Rng + Clone> Game<R> {
             }
         }
 
-        self.decl_enforce_obligations(da, &mut decl_cards);
+        let forced_cards = self.decl_enforce_obligations(&da, &mut decl_cards);
 
         let decl = Declaration {
             cards: decl_cards,
             player: tpos,
         };
-
         self.add_table_decl(decl);
-        Ok(())
+
+        Ok(PerformedAction {
+            action: PlayerAction::Declare(da),
+            player: tpos,
+            forced_cards: forced_cards,
+            xeri: false,
+        })
     }
 
 }

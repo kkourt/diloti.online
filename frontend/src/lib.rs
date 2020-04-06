@@ -60,13 +60,17 @@ impl ToElem for core::Card {
 }
 
 
-fn iter_to_elem<T: ToElem, I: Iterator<Item=T>>(start: &str, mut iter: I, end: &str) -> Node<Msg> {
+fn iter_to_elem<T: ToElem, I: Iterator<Item=T>>(start: &str, iter: I, end: &str) -> Node<Msg> {
+    iter_to_elem_sep(start, iter, " ", end)
+}
+
+fn iter_to_elem_sep<T: ToElem, I: Iterator<Item=T>>(start: &str, mut iter: I, sep: &str, end: &str) -> Node<Msg> {
     let mut span = span![span![start]];
         let i0 = iter.next();
         if let Some(x0) = i0 {
             span.add_child(x0.to_elem());
             for x in iter {
-                span.add_child(span![" "]);
+                span.add_child(span![sep]);
                 span.add_child(x.to_elem());
             }
         }
@@ -1154,7 +1158,7 @@ impl GameSt {
 
         div![
             attrs!{At::Class => "container"},
-            p![format!("Table (total: {} -- You might have to scroll down)", self.view.table.nentries())],
+            p![format!("Table (total: {} -- you might have to scroll down)", self.view.table.nentries())],
             div![ attrs!{At::Class => "table"},  entries ],
         ]
     }
@@ -1204,11 +1208,70 @@ impl GameSt {
         phase
     }
 
+    fn view_last_action(&self) -> Node<Msg> {
+        let la = match self.view.last_action.as_ref() {
+            None => return div![""],
+            Some(x) => x,
+        };
+
+        let mut act_elem = match &la.action {
+            core::PlayerAction::LayDown(c) => span!["laying down their ", c.to_elem(),],
+            core::PlayerAction::Capture(ca) if la.xeri => {
+                let mut table_cards = ca.get_table_cards();
+                span!["making a ξερή capturing ",
+                      iter_to_elem("", table_cards.drain(..), ""),
+                      " with their ",
+                      ca.handcard.to_elem()
+                ]
+            },
+            core::PlayerAction::Capture(ca) => {
+                let mut table_cards = ca.get_table_cards();
+                span!["capturing ",
+                      iter_to_elem("", table_cards.drain(..), ""),
+                      " with their ",
+                      ca.handcard.to_elem()
+                ]
+            },
+            core::PlayerAction::Declare(da) => {
+                match da.get_decl() {
+                    None => span![
+                        format!("creating a declaration of value {} with their ", da.value()),
+                        da.handcard().to_elem(),
+                    ],
+                    Some(decl) if decl.value() < da.value() => span![
+                        format!("caising a declaration of value {} to value {} with their ", decl.value(), da.value()),
+                        da.handcard().to_elem(),
+                    ],
+                    Some(decl) if decl.value() == da.value() => span![
+                        format!("adding to a declaration of value {} their ", da.value()),
+                        da.handcard().to_elem(),
+                    ],
+                    _ => panic!("Invalid decl"),
+
+                }
+            }
+        };
+
+        if la.forced_cards.len() > 0 {
+            act_elem.add_child(
+                iter_to_elem(" (forced table cards:", la.forced_cards.iter().cloned(), ")")
+            );
+        }
+        act_elem.add_child(span!["."]);
+
+        let pname = self.lobby_info.player_from_tpos(la.player).unwrap().name.clone();
+        div![
+            span![format!("Last play from {} (P{}) was ", pname, la.player.0)],
+            act_elem
+        ]
+    }
+
     fn view(&self) -> Node<Msg> {
         let table = self.view_table();
         let hand = self.view_hand();
         let phase = self.view_phase();
-        div![table, hand, phase]
+        let last_action = self.view_last_action();
+        div![table, hand, phase, last_action]
     }
 
     fn view_score(&self, sheets: &Vec<core::ScoreSheet>) -> Node<Msg> {

@@ -92,9 +92,8 @@ impl Captures {
     pub fn new() -> Captures {
         Captures(vec![])
     }
-    pub fn add_cards(&mut self, mut cards: Vec<Card>, is_xeri: bool) {
-        assert!(cards.len() > 1); // at least one from hand, and one from the table
 
+    pub fn add_cards_(&mut self, mut cards: Vec<Card>, is_xeri: bool) {
         let mut iter = cards.drain(..);
         if is_xeri {
             let xeri_card = iter.next().unwrap();
@@ -103,6 +102,15 @@ impl Captures {
         }
 
         self.0.extend(iter.map(|x| Capture::Card(x)));
+    }
+
+    pub fn add_final_cards(&mut self, cards: Vec<Card>, is_xeri: bool) {
+        self.add_cards_(cards, is_xeri);
+    }
+
+    pub fn add_cards(&mut self, cards: Vec<Card>, is_xeri: bool) {
+        assert!(cards.len() > 1); // at least one from hand, and one from the table
+        self.add_cards_(cards, is_xeri);
     }
 
     pub fn score(&self) -> ScoreSheet {
