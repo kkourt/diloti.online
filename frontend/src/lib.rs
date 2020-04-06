@@ -1141,48 +1141,45 @@ impl GameSt {
         div![ attr, format!("{}", card)]
     }
 
-    fn view(&self) -> Node<Msg> {
+    fn view_table(&self) -> Node<Msg> {
+        let mut entries: Vec<Node<Msg>> = vec![];
+        for (eidx, entry) in self.view.enum_table_entries() {
+            let selected: bool = self.phase.is_tentry_selected(entry);
+            let mut e_div = self.mk_table_entry_div(entry, selected);
+            e_div.add_listener(
+                simple_ev(Ev::Click, Msg::InGame(InGameMsg::ClickTableEntry(eidx)))
+            );
+            entries.push(e_div)
+        }
 
-        // let p_id = self.game.turn.0;
+        div![
+            attrs!{At::Class => "container"},
+            p![format!("Table (total: {} -- You might have to scroll down)", self.view.table.nentries())],
+            div![ attrs!{At::Class => "table"},  entries ],
+        ]
+    }
 
-        let table = {
-            let mut entries: Vec<Node<Msg>> = vec![];
-            for (eidx, entry) in self.view.enum_table_entries() {
-                let selected: bool = self.phase.is_tentry_selected(entry);
-                let mut e_div = self.mk_table_entry_div(entry, selected);
-                e_div.add_listener(
-                    simple_ev(Ev::Click, Msg::InGame(InGameMsg::ClickTableEntry(eidx)))
-                );
-                entries.push(e_div)
-            }
+    fn view_hand(&self) -> Node<Msg> {
+        let mut cards: Vec<Node<Msg>> = vec![];
+        let selected_card_idx = self.phase.get_hand_selected_card();
+        for (cidx, card) in self.view.enum_hand_cards() {
+            let selected: bool = selected_card_idx.map_or(false, |sidx| sidx == cidx);
+            let mut c_div = self.mk_hand_card_div(card, selected);
+            c_div.add_listener(
+                simple_ev(Ev::Click, Msg::InGame(InGameMsg::ClickHandCard(cidx)))
+            );
+            cards.push(c_div);
+        }
 
-            div![
-                attrs!{At::Class => "container"},
-                p![format!("Table (total: {} -- You might have to scroll down)", self.view.table.nentries())],
-                div![ attrs!{At::Class => "table"},  entries ],
-            ]
-        };
+        div![
+            attrs!{At::Class => "container"},
+            //p!["Hand"],
+            p![format!("Hand (total: {} -- You might have to scroll down)", self.view.own_hand.ncards())],
+            div![ attrs!{At::Class => "hand"}, cards],
+        ]
+    }
 
-        let hand = {
-            let mut cards: Vec<Node<Msg>> = vec![];
-            let selected_card_idx = self.phase.get_hand_selected_card();
-            for (cidx, card) in self.view.enum_hand_cards() {
-                let selected: bool = selected_card_idx.map_or(false, |sidx| sidx == cidx);
-                let mut c_div = self.mk_hand_card_div(card, selected);
-                c_div.add_listener(
-                    simple_ev(Ev::Click, Msg::InGame(InGameMsg::ClickHandCard(cidx)))
-                );
-                cards.push(c_div);
-            }
-
-            div![
-                attrs!{At::Class => "container"},
-                //p!["Hand"],
-                p![format!("Hand (total: {} -- You might have to scroll down)", self.view.own_hand.ncards())],
-                div![ attrs!{At::Class => "hand"}, cards],
-            ]
-        };
-
+    fn view_phase(&self) -> Node<Msg> {
         // TODO: if a user has a declaration on the table, be helpful about their possible actions
         // :)
         let phase_elem = match &self.phase {
@@ -1204,6 +1201,13 @@ impl GameSt {
             phase.add_child(p![ class!["error-msg"], self.tmp_error_msg ]);
         }
 
+        phase
+    }
+
+    fn view(&self) -> Node<Msg> {
+        let table = self.view_table();
+        let hand = self.view_hand();
+        let phase = self.view_phase();
         div![table, hand, phase]
     }
 
