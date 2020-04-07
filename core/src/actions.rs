@@ -39,6 +39,7 @@ pub struct CaptureAction {
     pub tentries: Vec<Vec<TableEntry>>,
 }
 
+#[derive(Debug, Clone)]
 pub enum GetSingleRes<T> {
     Zero,
     OnlyOne(T),
@@ -164,7 +165,7 @@ impl DeclAction {
         self.validate_decl_base(hand)?;
 
         match self.get_single_decl() {
-            GetSingleRes::Zero => (),
+            GetSingleRes::Zero => return Err("You cannot create a new declaration if you have one on the table".to_string()),
             GetSingleRes::OnlyOne(d) if d != decl => return Err("You cannot act on a declaration other than your lastest one".to_string()),
             GetSingleRes::OnlyOne(d) if d.value() != self.value() => return Err("You may not raise your declaration".to_string()),
             GetSingleRes::MoreThanOne => return Err("You may not combine more than one declaration to form a new one".to_string()),
