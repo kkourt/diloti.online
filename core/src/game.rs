@@ -499,8 +499,15 @@ impl PlayerGameView {
 
     pub fn is_my_turn(&self) -> bool {
         match self.state {
-            GameState::NextTurn(pid) if pid == self.pid => true,
+            GameState::NextTurn(tpos) if tpos == self.pid => true,
             _ => false,
+        }
+    }
+
+    pub fn active_tpos(&self) -> Option<PlayerTpos> {
+        match self.state {
+            GameState::NextTurn(tpos) => Some(tpos),
+            _ => None,
         }
     }
 }

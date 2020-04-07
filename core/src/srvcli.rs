@@ -113,8 +113,22 @@ impl LobbyInfo {
        self.players.iter().find( |pi| pi.tpos == tpos)
     }
 
+    // iterate players in tpos order
+    pub fn iter_players_tpos<'a>(&'a self) -> impl Iterator<Item=(PlayerTpos, &PlayerInfo)> + 'a {
+        (0..self.nplayers)
+            .map(move |i| {
+                let tpos = PlayerTpos(i);
+                let player = self.player_from_tpos(tpos.clone()).unwrap();
+                (tpos, player)
+            })
+    }
+
     pub fn my_tpos(&self) -> PlayerTpos {
         self.players[self.self_id.0].tpos
+    }
+
+    pub fn get_player(&self, pid: PlayerId) -> Option<&PlayerInfo> {
+        self.players.get(pid.0)
     }
 
     pub fn player_id_from_tpos(&self, tpos: PlayerTpos) -> Option<PlayerId> {

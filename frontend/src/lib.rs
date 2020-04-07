@@ -21,16 +21,6 @@ type XRng = rand_pcg::Pcg64;
 
 const DEFAULT_NR_PLAYERS: u8 = 2;
 
-pub fn hand_from_string(s: &str) -> Option<core::Deck> {
-    let mut vec : Vec<core::Card> = vec![];
-    for cs in s.split_whitespace() {
-        let card = core::Card::try_from(cs).ok()?;
-        vec.push(card)
-    }
-
-    Some(core::Deck { cards: vec })
-}
-
 /// Initial state
 
 #[derive(Clone,Debug)]
@@ -218,6 +208,16 @@ struct InitSt {
 
 fn get_create_game_req_url() -> impl Into<std::borrow::Cow<'static, str>> {
     "/creategame"
+}
+
+fn tpos_char(tpos: srvcli::PlayerTpos) -> char {
+    match tpos.0 {
+        0 => '\u{278A}',
+        1 => '\u{278B}',
+        2 => '\u{278C}',
+        3 => '\u{278D}',
+        _ => panic!("Invalid tpos: {:?}", tpos),
+    }
 }
 
 impl InitSt {
@@ -1175,11 +1175,19 @@ impl GameSt {
             cards.push(c_div);
         }
 
+        let hand_attrs =  if self.myturn() {
+            let mut attrs_ = attrs!{};
+            attrs_.add_multiple(At::Class, &["hand", "active"]);
+            attrs_
+        } else {
+            attrs!{At::Class => "hand"}
+         };
+
         div![
             attrs!{At::Class => "container"},
             //p!["Hand"],
-            p![format!("Hand (total: {} -- You might have to scroll down)", self.view.own_hand.ncards())],
-            div![ attrs!{At::Class => "hand"}, cards],
+            p![format!("Hand (total: {} -- you might have to scroll down)", self.view.own_hand.ncards())],
+            div![hand_attrs, cards],
         ]
     }
 
@@ -1187,7 +1195,10 @@ impl GameSt {
         // TODO: if a user has a declaration on the table, be helpful about their possible actions
         // :)
         let phase_elem = match &self.phase {
-            GamePhase::OthersTurn(_) => p!["Waiting for other player's turn"],
+            GamePhase::OthersTurn(pid) => {
+                let player = self.lobby_info.get_player(pid.clone()).unwrap();
+                p![format!("Waiting for {} ({})", player.name, tpos_char(player.tpos))]
+            },
             GamePhase::MyTurn(TurnProgress::Nothing(msg)) => msg.clone(),
             GamePhase::MyTurn(TurnProgress::CardSelected(cidx)) => self.view_selected_card(*cidx),
             GamePhase::MyTurn(TurnProgress::DeclaringWith(cidx, ts)) => self.view_declaration(*cidx, ts),
@@ -1206,6 +1217,21 @@ impl GameSt {
         }
 
         phase
+    }
+
+    fn view_players(&self) -> Node<Msg> {
+        let mut players = div![p!["Players"]];
+        let tpos_active = self.view.active_tpos().unwrap();
+        for (tpos, player) in self.lobby_info.iter_players_tpos() {
+            let c = tpos_char(tpos);
+            let attrs = if tpos == tpos_active {
+                attrs!{At::Class => "active-player"}
+            } else {
+                attrs!{At::Class => "inactive-player"}
+            };
+            players.add_child(span!(attrs, format!("{} {} ", c, player.name)));
+        }
+        players
     }
 
     fn view_last_action(&self) -> Node<Msg> {
@@ -1239,7 +1265,7 @@ impl GameSt {
                         da.handcard().to_elem(),
                     ],
                     Some(decl) if decl.value() < da.value() => span![
-                        format!("caising a declaration of value {} to value {} with their ", decl.value(), da.value()),
+                        format!("raising a declaration from {} to {} with their ", decl.value(), da.value()),
                         da.handcard().to_elem(),
                     ],
                     Some(decl) if decl.value() == da.value() => span![
@@ -1267,11 +1293,12 @@ impl GameSt {
     }
 
     fn view(&self) -> Node<Msg> {
+        let players = self.view_players();
         let table = self.view_table();
         let hand = self.view_hand();
         let phase = self.view_phase();
         let last_action = self.view_last_action();
-        div![table, hand, phase, last_action]
+        div![players, table, hand, phase, last_action]
     }
 
     fn view_score(&self, sheets: &Vec<core::ScoreSheet>) -> Node<Msg> {
@@ -1346,8 +1373,7 @@ impl GameSt {
                 );
 
                 /*
-                for i in 2..11 {
-                //for i in sum_set.iter().clone() {
+                for i in sum_set.iter().clone() {
                     div.add_child(
                         button![ simple_ev(Ev::Click, msg_fn(i)), i.to_string() ]
                     );

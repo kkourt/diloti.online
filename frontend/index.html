@@ -75,12 +75,16 @@
     .hand {
       float: left;
       border-color: black;
-      background-color: darksalmon;
+      background-color: gray;
       height: 140px;
       padding-top: 10px;
       padding-bottom: 10px;
       min-width: 100px;
       overflow: auto;
+    }
+
+    .hand.active {
+      background-color: darksalmon;
     }
 
     .table {
@@ -109,6 +113,15 @@
       clear: both;
       padding-top: 5px;
     }
+
+    .active-player {
+      color: black;
+    }
+
+    .inactive-player {
+      color: silver;
+    }
+
     </style>
     <title>Δηλωτή online</title>
     </head>
