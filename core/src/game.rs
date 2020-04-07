@@ -317,16 +317,10 @@ impl<R: rand::Rng + Clone> Game<R> {
 
     /// enforce obligations on a declaration
     fn decl_enforce_obligations(&mut self, da: &DeclAction, decl_cards: &mut Vec<Vec<Card>>) -> Vec<Card> {
-        // NB: not sure if this is all of it, but for simplicity let's do the following:
-        // whenever there is a *new* declaration, then existing cards on the table with the same
-        // value are dragged in it.
         let mut ret: Vec<Card> = vec![];
 
-        // Not a new declaration, do nothing
-        if da.has_decl() {
-            return ret;
-        }
-
+        // NB: I don't think there are any cases where the declaration is valid and we shouldn't do
+        // this.
         let val = da.value();
         while let Some(card) = self.table.remove_card_with_value(val) {
             ret.push(card.clone());
