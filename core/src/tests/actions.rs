@@ -63,7 +63,6 @@ fn no_two_decls() {
     let hand = &game.players[0].hand;
     let table = &game.table;
 
-
     let act1 = PlayerAction::Declare(DeclAction {
         tentries: vec![
             vec![mk_te("D2")],

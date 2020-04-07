@@ -264,14 +264,15 @@ impl InitSt {
                 match result {
                     // change state to lobby
                     Ok(rep) => {
-                        return Some(Model::InLobby(
-                            // TODO: proper error checking
-                            LobbySt::new(
-                                rep.game_id.clone(),
-                                self.player_name.clone(),
-                                orders,
-                            ).unwrap()
-                        ));
+                        let ret = LobbySt::new(rep.game_id.clone(), self.player_name.clone(), orders,);
+                        match ret {
+                            Ok(st) => return Some(Model::InLobby(st)),
+                            Err(x) => {
+                                self.start_game_err = Some("Could not create new game".to_string());
+                                log!(format!("Error creating game: {:?}", x));
+                                return None;
+                            }
+                        }
                     }
 
                     Err(x) => {
