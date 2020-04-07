@@ -648,13 +648,14 @@ impl LobbySt {
     }
 
     fn view(&self) -> Node<Msg> {
-        let hname = web_sys::window().unwrap().location().host().unwrap();
-        let join_href = format!("{}/?join={}", hname, self.game_id);
+        let hname = web_sys::window().expect("web_sys window").location().host().expect("location");
+        let join_name = format!("{}/?join={}", hname, self.game_id);
+        let join_href = format!("/?join={}", self.game_id);
         let body = if self.lobby_info.is_some() { self.view_players() } else { p!["--"] };
 
         div![
             h2!["Lobby"],
-            p!["join link: ", a![attrs! {At::Href => join_href}, join_href]],
+            p!["join link: ", a![attrs! {At::Href => join_href}, join_name]],
             p![""],
             body,
         ]
@@ -721,15 +722,18 @@ impl LobbySt {
         player_name: String,
         orders: &mut impl Orders<Msg>
     ) -> Result<LobbySt, String> {
-        let hname = web_sys::window().unwrap().location().host().unwrap();
-        let ws_url = format!("ws://{}/ws/{}/{}", hname, game_id, player_name);
+        let loc = web_sys::window().expect("web_sys::window").location();
+        let proto = loc.protocol().expect("location protocol");
+        let ws_proto = if proto.starts_with("https") { "wss" } else { "ws" };
+        let hname = loc.host().expect("location host");
+        let ws_url = format!("{}://{}/ws/{}/{}", ws_proto, hname, game_id, player_name);
         // log(format!("**************** ws_url={}", ws_url));
         if let Some(storage) = seed::storage::get_storage() {
             seed::storage::store_data(&storage, "player_name", &player_name);
         }
 
         let wsocket = std::rc::Rc::<Wsocket>::new(Wsocket {
-            ws: web_sys::WebSocket::new(&ws_url).unwrap(),
+            ws: web_sys::WebSocket::new(&ws_url).expect(&format!("new websocket on {:?}", ws_url)),
             ws_state: WsState::Init,
         });
 
