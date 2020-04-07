@@ -130,7 +130,6 @@ async fn start_player(
     }
 }
 
-
 // game handler
 
 #[tokio::main]
@@ -141,11 +140,26 @@ async fn main() {
     // channel to directory task
     let dir_tx = directory::spawn_directory_task();
 
+    let index: std::borrow::Cow<str> = match std::fs::read_to_string("frontend/index.html") {
+        Err(x) => {
+            log::error!("Failed to open index file: {:?}", x);
+            return
+        },
+        Ok(x) => x,
+    }.into();
+
     //
     // route: /
     let index_r = warp::get()
-        .and(warp::path::end())
-        .and(warp::fs::file("frontend/index.html"));
+        .and(
+            warp::path::end().map(move || {
+                let index_ = index.clone();
+                warp::http::Response::builder()
+                    .header("content-type", "text/html; charset=utf-8")
+                    .body(index_)
+            })
+        );
+        //.and(warp::fs::file("frontend/index.html")); // encoding does not seem to work here
 
     // route: /pkg
     let pkg_r = warp::path("pkg").and(warp::fs::dir("frontend/pkg/"));
