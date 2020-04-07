@@ -496,6 +496,3 @@ impl CaptureActionBuilder {
         PlayerAction::Capture(self.make_capture_action())
     }
 }
-
-impl PerformedAction {
-}

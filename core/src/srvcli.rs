@@ -76,6 +76,7 @@ pub enum ServerMsg {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ClientMsg {
     StartGame,
+    SwapTpos(PlayerTpos, PlayerTpos),
     PlayerAction(actions::PlayerAction),
 }
 
@@ -113,13 +114,39 @@ impl LobbyInfo {
        self.players.iter().find( |pi| pi.tpos == tpos)
     }
 
+    pub fn iter_players<'a>(&'a self) -> impl Iterator<Item=(PlayerId, &PlayerInfo)> + 'a {
+        self.players.iter().enumerate().map( |(i,p)| (PlayerId(i), p))
+    }
+
+    pub fn all_ready(&self) -> bool {
+        return self.players.len() == self.nplayers as usize
+    }
+
+    pub fn is_self(&self, pid: PlayerId) -> bool {
+        self.self_id == pid
+    }
+
+    pub fn is_self_from_tpos(&self, tpos: PlayerTpos) -> bool {
+        self.player_id_from_tpos(tpos).map_or(false, |pid| self.self_id == pid)
+    }
+
+    pub fn is_admin(&self, pid: PlayerId) -> bool {
+        self.players.get(pid.0).map_or(false, |x| x.admin)
+    }
+
+    pub fn am_i_admin(&self) -> bool {
+        self.players[self.self_id.0].admin
+    }
+
     // iterate players in tpos order
     pub fn iter_players_tpos<'a>(&'a self) -> impl Iterator<Item=(PlayerTpos, &PlayerInfo)> + 'a {
         (0..self.nplayers)
-            .map(move |i| {
+            .filter_map(move |i| {
                 let tpos = PlayerTpos(i);
-                let player = self.player_from_tpos(tpos.clone()).unwrap();
-                (tpos, player)
+                match self.player_from_tpos(tpos.clone()) {
+                    None => None,
+                    Some(p) => Some((tpos, p)),
+                }
             })
     }
 
@@ -147,21 +174,15 @@ impl LobbyInfo {
         }
     }
 
-    pub fn team_players(&self, i: usize) -> Vec<String> {
+    pub fn team_tpos(&self, i: usize) -> Vec<PlayerTpos> {
         match (self.nplayers, i) {
-            (1, 0) => vec![self.player_from_tpos(PlayerTpos(0)).unwrap().name.clone()],
+            (1, 0) => vec![PlayerTpos(0)],
 
-            (2, 0) => vec![self.player_from_tpos(PlayerTpos(0)).unwrap().name.clone()],
-            (2, 1) => vec![self.player_from_tpos(PlayerTpos(1)).unwrap().name.clone()],
+            (2, 0) => vec![PlayerTpos(0)],
+            (2, 1) => vec![PlayerTpos(1)],
 
-            (4, 0) => vec![
-                self.player_from_tpos(PlayerTpos(0)).unwrap().name.clone(),
-                self.player_from_tpos(PlayerTpos(2)).unwrap().name.clone(),
-            ],
-            (4, 1) => vec![
-                self.player_from_tpos(PlayerTpos(1)).unwrap().name.clone(),
-                self.player_from_tpos(PlayerTpos(3)).unwrap().name.clone(),
-            ],
+            (4, 0) => vec![PlayerTpos(0), PlayerTpos(2)],
+            (4, 1) => vec![PlayerTpos(1), PlayerTpos(3)],
             _ => panic!("Unexpected number of players/teams"),
         }
     }

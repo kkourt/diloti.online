@@ -146,7 +146,7 @@ impl ToElem for core::CaptureActionBuilder {
 
 impl ToElem for core::ScoreSheet {
     fn to_elem(&self) -> Node<Msg> {
-        let details = if self.score == 0 { span![":-("] } else {
+        let details = if self.score == 0 { span![""] } else {
             let mut nodes: Vec<Vec<Node<Msg>>> = vec![];
             if self.has_the_cards() {
                 nodes.push(
@@ -179,7 +179,7 @@ impl ToElem for core::ScoreSheet {
                 )
             }
 
-            let mut span = span![" ="];
+            let mut span = span![];
             let sep = vec![span![" + "]];
             let mut joined = (&nodes[..]).join(&sep[..]);
             for n in joined.drain(..) {
@@ -188,10 +188,7 @@ impl ToElem for core::ScoreSheet {
             span
         };
 
-        span![
-            b![format!("{}", self.score)],
-            details,
-        ]
+        span![details]
     }
 }
 
@@ -210,12 +207,24 @@ fn get_create_game_req_url() -> impl Into<std::borrow::Cow<'static, str>> {
     "/creategame"
 }
 
+/*
 fn tpos_char(tpos: srvcli::PlayerTpos) -> char {
     match tpos.0 {
         0 => '\u{278A}',
         1 => '\u{278B}',
         2 => '\u{278C}',
         3 => '\u{278D}',
+        _ => panic!("Invalid tpos: {:?}", tpos),
+    }
+}
+*/
+
+fn tpos_char(tpos: srvcli::PlayerTpos) -> char {
+    match tpos.0 {
+        0 => '\u{278A}', // black (1)
+        1 => '\u{2781}', // white (2)
+        2 => '\u{278C}', // black (3)
+        3 => '\u{2783}', // white (4)
         _ => panic!("Invalid tpos: {:?}", tpos),
     }
 }
@@ -303,7 +312,6 @@ impl InitSt {
             },
 
             InitMsg::SetPlayerName(x) => {
-                log!("SetPlayerName: {x}", x);
                 self.player_name = x.to_string();
             },
 
@@ -503,6 +511,7 @@ impl JoinSt {
 #[derive(Debug,Clone)]
 enum LobbyMsg {
     IssueStart,
+    SwapTpos(srvcli::PlayerTpos, srvcli::PlayerTpos),
 }
 
 #[derive(Debug)]
@@ -537,62 +546,91 @@ fn register_ws_handler<T, F>(
     closure.forget();
 }
 
+fn lobby_tpos_elem(lobby_info: &LobbyInfo, tpos: srvcli::PlayerTpos) -> Node<Msg> {
+    let am_admin = lobby_info.am_i_admin();
+    let all_ready = lobby_info.all_ready();
+
+    let msg_fn = |tpos: srvcli::PlayerTpos| {
+        let tpos1 = tpos.clone();
+        move |x: String| {
+            let tpos2 = srvcli::PlayerTpos(x.parse::<u8>().unwrap());
+            Msg::Lobby(LobbyMsg::SwapTpos(tpos1, tpos2))
+        }
+    };
+
+    let tpos_str = tpos.0.to_string();
+    let mut select_opts = vec![];
+    for i in 0..lobby_info.nplayers {
+        let tpos_i = srvcli::PlayerTpos(i);
+        let mut attrs = attrs!{At::Value => i.to_string()};
+        if tpos_i == tpos {
+            attrs.add(At::Selected, "true")
+        }
+        if !am_admin || !all_ready {
+            attrs.add(At::Disabled, "true")
+        }
+        select_opts.push(option![tpos_char(tpos_i).to_string(), attrs, ]);
+    }
+
+    select![
+        attrs!{At::Value => tpos.0.to_string()},
+        select_opts,
+        input_ev(Ev::Input, msg_fn(tpos))
+    ]
+}
 
 impl LobbySt {
 
     fn view_players(&self) -> Node<Msg> {
-        if self.lobby_info.is_none() {
-            return p![""];
-        }
-
         let lobby_info: &LobbyInfo = self.lobby_info.as_ref().unwrap();
+        let am_admin = lobby_info.am_i_admin();
+        let all_ready = lobby_info.all_ready();
+        let nplayers = lobby_info.nplayers;
 
-        let mut player_rows : Vec<Node<Msg>> = vec![];
-        for i in 0..lobby_info.nplayers {
-            let tpos_i = srvcli::PlayerTpos(i);
-            let td_p = td![format!("P{}: ", i+1)];
-            let (td_name, td_status, td_other) : (Node<Msg>, Node<Msg>, Node<Msg>) = {
-                let pinfo = lobby_info.players.iter().enumerate().find( |(_, pi)| pi.tpos == tpos_i);
-                match pinfo {
-                    None => (td![""], td!["empty"], td![""]),
-                    Some((xid, info)) => {
-                        let td_other = {
-                            let mut other = vec![];
-                            if srvcli::PlayerId(xid) == lobby_info.self_id {
-                                other.push("you!");
-                            }
-                            if info.admin {
-                                other.push("game admin");
-                            }
+        let mut player_rows = vec![];
 
-                            if other.len() == 0 {
-                                td![""]
-                            } else {
-                                td![format!("({})", other.join(", "))]
-                            }
-                        };
-                        (td![info.name], td!["is ready"], td_other)
-                    }
-                }
-            };
-            player_rows.push(tr![td_p, td_name, td_status, td_other])
-
+        if nplayers == 4 {
+            player_rows.push(tr![th!["pos"], th!["name"], th![""], th!["team"]]);
+        } else {
+            player_rows.push(tr![th!["pos"], th!["name"], th![""]]);
         }
 
+        for (tpos, player) in lobby_info.iter_players_tpos() {
+            let mut vattrs = vec![];
+            if lobby_info.is_self_from_tpos(tpos) {
+                vattrs.push("you");
+            }
+            if player.admin {
+                vattrs.push("admin");
+            }
 
+            let td_tpos = td![lobby_tpos_elem(lobby_info, tpos)];
+            let td_name = td![player.name];
+            let td_attrs = if vattrs.len() > 0 {
+                td![format!("({})", vattrs.join(", "))]
+            } else { td![""] };
 
+            if nplayers == 4 {
+                let td_team = td![
+                    if tpos.0 % 2 == 0 {
+                        "\u{25cf}" // black circle
+                    } else {
+                        "\u{25cb}" // white cirlce
+                    }
+                ];
+                player_rows.push(tr![td_tpos, td_name, td_attrs, td_team]);
+            } else {
+                player_rows.push(tr![td_tpos, td_name, td_attrs]);
+            }
+        }
 
-        let hname = web_sys::window().unwrap().location().host().unwrap();
-        let join_href = format!("{}/?join={}", hname, self.game_id);
         let mut div = div![
-            p!["join link: ", a![attrs! {At::Href => join_href}, join_href]],
-            p![""],
-            h3!["Players"],
-            table![player_rows],
+            h3![format!("Players ({}/{})", lobby_info.players.len(), lobby_info.nplayers)],
+            table![player_rows, attrs!{At::Class => "lobby-players"}, ]
         ];
 
-        if lobby_info.players[lobby_info.self_id.0].admin {
-            let attrs = if lobby_info.nplayers as usize != lobby_info.players.len() {
+        if am_admin {
+            let attrs = if !all_ready {
                 attrs!{At::Disabled => "true"}
             } else {
                 attrs!{}
@@ -606,13 +644,18 @@ impl LobbySt {
         }
 
         div
-
     }
 
     fn view(&self) -> Node<Msg> {
+        let hname = web_sys::window().unwrap().location().host().unwrap();
+        let join_href = format!("{}/?join={}", hname, self.game_id);
+        let body = if self.lobby_info.is_some() { self.view_players() } else { p!["--"] };
+
         div![
             h2!["Lobby"],
-            self.view_players(),
+            p!["join link: ", a![attrs! {At::Href => join_href}, join_href]],
+            p![""],
+            body,
         ]
     }
 
@@ -626,6 +669,14 @@ impl LobbySt {
                 }
                 None
             },
+            LobbyMsg::SwapTpos(tpos1, tpos2) => {
+                let req = serde_json::to_string(&ClientMsg::SwapTpos(*tpos1, *tpos2)).unwrap();
+                if let Err(x) = self.wsocket.ws.send_with_str(&req) {
+                    error!("Failed to send data to server");
+                    unimplemented!();
+                }
+                None
+            },
         }
     }
 
@@ -633,7 +684,7 @@ impl LobbySt {
         match (ev, self.wsocket.ws_state) {
             (WsEvent::WsConnected(jv), WsState::Init) => {
                 // change ws state to ready
-                log(format!("Connected: {}", jv.as_string().unwrap_or("<None>".to_string())));
+                //log(format!("Connected: {}", jv.as_string().unwrap_or("<None>".to_string())));
                 {
                     let ws = std::rc::Rc::get_mut(&mut self.wsocket).unwrap();
                     ws.ws_state = WsState::Ready;
@@ -641,7 +692,7 @@ impl LobbySt {
             },
             (WsEvent::WsMessage(msg), WsState::Ready) => {
                 let txt = msg.data().as_string().expect("No data in server message");
-                log(format!("Received message {:?}", txt));
+                //log(format!("Received message {:?}", txt));
                 let srv_msg: ServerMsg = serde_json::from_str(&txt).unwrap();
                 self.lobby_info = Some(match srv_msg {
                     ServerMsg::InLobby(x) => x,
@@ -668,7 +719,7 @@ impl LobbySt {
         game_id: String,
         player_name: String,
         orders: &mut impl Orders<Msg>
-    ) -> Result<LobbySt,String> {
+    ) -> Result<LobbySt, String> {
         let hname = web_sys::window().unwrap().location().host().unwrap();
         let ws_url = format!("ws://{}/ws/{}/{}", hname, game_id, player_name);
         // log(format!("**************** ws_url={}", ws_url));
@@ -890,7 +941,7 @@ impl GameSt {
     }
 
     fn issue_action_validate(&mut self, act: core::PlayerAction) {
-        log(format!("Issuing action: {:?}", act));
+        //log(format!("Issuing action: {:?}", act));
         let valid_check = act.validate(&self.view);
         let invalid_msg = match valid_check {
             Ok(()) => {
@@ -1063,7 +1114,7 @@ impl GameSt {
             (WsEvent::WsConnected(jv), _) => unimplemented!(),
             (WsEvent::WsMessage(msg), WsState::Ready) => {
                 let txt = msg.data().as_string().expect("No data in server message");
-                log(format!("Received message {:?}", txt));
+                //log(format!("Received message {:?}", txt));
                 let srv_msg: ServerMsg = serde_json::from_str(&txt).unwrap();
                 self.handle_server_message(srv_msg)
             },
@@ -1221,10 +1272,10 @@ impl GameSt {
 
     fn view_players(&self) -> Node<Msg> {
         let mut players = div![p!["Players"]];
-        let tpos_active = self.view.active_tpos().unwrap();
+        let tpos_active = self.view.active_tpos();
         for (tpos, player) in self.lobby_info.iter_players_tpos() {
             let c = tpos_char(tpos);
-            let attrs = if tpos == tpos_active {
+            let attrs = if Some(tpos) == tpos_active {
                 attrs!{At::Class => "active-player"}
             } else {
                 attrs!{At::Class => "inactive-player"}
@@ -1241,10 +1292,10 @@ impl GameSt {
         };
 
         let mut act_elem = match &la.action {
-            core::PlayerAction::LayDown(c) => span!["laying down their ", c.to_elem(),],
+            core::PlayerAction::LayDown(c) => span!["laid down their ", c.to_elem(),],
             core::PlayerAction::Capture(ca) if la.xeri => {
                 let mut table_cards = ca.get_table_cards();
-                span!["making a ξερή capturing ",
+                span!["made a «ξερή» capturing ",
                       iter_to_elem("", table_cards.drain(..), ""),
                       " with their ",
                       ca.handcard.to_elem()
@@ -1252,7 +1303,7 @@ impl GameSt {
             },
             core::PlayerAction::Capture(ca) => {
                 let mut table_cards = ca.get_table_cards();
-                span!["capturing ",
+                span!["captured ",
                       iter_to_elem("", table_cards.drain(..), ""),
                       " with their ",
                       ca.handcard.to_elem()
@@ -1261,15 +1312,15 @@ impl GameSt {
             core::PlayerAction::Declare(da) => {
                 match da.get_decl() {
                     None => span![
-                        format!("creating a declaration of value {} with their ", da.value()),
+                        format!("created a declaration of value {} with their ", da.value()),
                         da.handcard().to_elem(),
                     ],
                     Some(decl) if decl.value() < da.value() => span![
-                        format!("raising a declaration from {} to {} with their ", decl.value(), da.value()),
+                        format!("raised a declaration from {} to {} with their ", decl.value(), da.value()),
                         da.handcard().to_elem(),
                     ],
                     Some(decl) if decl.value() == da.value() => span![
-                        format!("adding to a declaration of value {} their ", da.value()),
+                        format!("added to a declaration of value {} their ", da.value()),
                         da.handcard().to_elem(),
                     ],
                     _ => panic!("Invalid decl"),
@@ -1287,31 +1338,51 @@ impl GameSt {
 
         let pname = self.lobby_info.player_from_tpos(la.player).unwrap().name.clone();
         div![
-            span![format!("Last play from {} (P{}) was ", pname, la.player.0)],
+            span![format!("Last action from {} {}: ", tpos_char(la.player), pname)],
             act_elem
         ]
     }
 
     fn view(&self) -> Node<Msg> {
-        let players = self.view_players();
-        let table = self.view_table();
-        let hand = self.view_hand();
-        let phase = self.view_phase();
-        let last_action = self.view_last_action();
-        div![players, table, hand, phase, last_action]
+        match self.phase {
+            GamePhase::MyTurn(_) | GamePhase::OthersTurn(_) | GamePhase::RoundDone => {
+                let players = self.view_players();
+                let table = self.view_table();
+                let hand = self.view_hand();
+                let phase = self.view_phase();
+                let last_action = self.view_last_action();
+                div![players, table, hand, phase, last_action]
+            },
+
+            GamePhase::GameDone(_) => {
+                let phase = self.view_phase();
+                let last_action = self.view_last_action();
+                div![h3!["Game done!"], last_action, phase]
+            }
+        }
     }
 
     fn view_score(&self, sheets: &Vec<core::ScoreSheet>) -> Node<Msg> {
-        let mut div = div![ p![format!("Game done!")] ];
+        let mut div = div![ h3!["Game Score"] ];
         assert!(sheets.len() == self.lobby_info.nteams());
+        let mut player_rows = vec![tr![th!["player(s)"], th!["score"], th!["points"]]];
         for (i,ss) in sheets.iter().enumerate() {
-            let p = p![
-                format!("Team T{} ({}) score: ", i, self.lobby_info.team_players(i).join(", ")),
-                ss.to_elem()
-            ];
-            div.add_child(p);
+            let team_str = self.lobby_info
+                .team_tpos(i)
+                .iter()
+                //.map( |tpos| format!("{} ({})", self.lobby_info.player_from_tpos(*tpos).unwrap().name, tpos_char(*tpos)))
+                .map( |tpos| self.lobby_info.player_from_tpos(*tpos).unwrap().name.clone())
+                .collect::<Vec<_>>()
+                .join(", ");
+
+            let players_td = td![team_str];
+            let points_td = td![b![ss.score.to_string()], attrs!{At::Class => "score"}];
+            let details_td = td![ss.to_elem()];
+            player_rows.push(tr![players_td, points_td, details_td])
         }
 
+        let table = table![player_rows, attrs!{At::Class => "scoring-table"}, ];
+        div.add_child(table);
         div
     }
 
@@ -1359,7 +1430,9 @@ impl GameSt {
                     span![" declaration value: "]
                 ];
                 let msg_fn = |x: String| Msg::InGame(InGameMsg::DeclareSetSum(x.parse::<u8>().unwrap()));
-                let mut opts = vec![];
+                let mut opts = vec![
+                    option!["?", attrs!{At::Disabled => "true", At::Selected => "true"}],
+                ];
                 for i in 1..11 {
                     opts.push(option![i.to_string(), attrs!{At::Value => i.to_string()}])
                 }
@@ -1470,7 +1543,7 @@ enum Msg {
 }
 
 fn update(msg: Msg, mut model: &mut Model, orders: &mut impl Orders<Msg>) {
-    log(format!("update => {:?}", msg));
+    //log(format!("update => {:?}", msg));
     let upd_ret = match (&mut model, msg) {
         (&mut Model::Init(st), Msg::Init(ref msg))     => st.update_state(msg, orders),
         (&mut Model::Join(st), Msg::Join(ref msg))     => st.update_state(msg, orders),
@@ -1503,6 +1576,7 @@ fn after_mount(url: Url, orders: &mut impl Orders<Msg>) -> AfterMount<Model> {
     let player_name = get_string_from_storage("player_name");
     let debug_hand = get_string_from_storage("debug_hand_cards");
     let debug_table = get_string_from_storage("debug_table_cards");
+    log(format!("Starting..."));
 
     if let Some(game_id) = join_game_id {
         let joinst = JoinSt {

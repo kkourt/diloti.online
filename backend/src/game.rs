@@ -221,6 +221,16 @@ impl Game {
         self.get_player(pid).player_info.tpos
     }
 
+    fn swap_player_tpos(&mut self, tpos1: srvcli::PlayerTpos, tpos2: srvcli::PlayerTpos) -> Result<(), String> {
+        let p1 = self.players.iter().position(|x| x.player_info.tpos == tpos1).ok_or("Failed to find tpos1")?;
+        let p2 = self.players.iter().position(|x| x.player_info.tpos == tpos2).ok_or("Failed to find tpos2")?;
+        assert_eq!(self.players[p1].player_info.tpos, tpos1);
+        assert_eq!(self.players[p2].player_info.tpos, tpos2);
+        self.players[p1].player_info.tpos = tpos2;
+        self.players[p2].player_info.tpos = tpos1;
+        Ok(())
+    }
+
     fn players_ready(&self) -> bool {
         self.players.len() == self.nplayers as usize
     }
@@ -260,7 +270,7 @@ impl Game {
 
     async fn handle_clireq(&mut self, pid: srvcli::PlayerId, climsg: srvcli::ClientMsg) {
         use State::{InLobby, InGame};
-        use srvcli::ClientMsg::{StartGame, PlayerAction};
+        use srvcli::ClientMsg::{StartGame, SwapTpos, PlayerAction};
 
         match (self.state.clone(), climsg) {
             (InLobby, StartGame) => {
@@ -275,6 +285,24 @@ impl Game {
                 }
 
                 self.state = State::InGame;
+                self.send_info_to_players().await;
+            },
+
+            (InLobby, SwapTpos(tpos1, tpos2)) => {
+                if !self.is_player_admin(pid) {
+                    log::error!("Non-admin player attempted to start game");
+                    return;
+                }
+
+                if !self.players_ready() {
+                    log::error!("admin attempted to swap positions while players are not ready");
+                    return;
+                }
+
+                match self.swap_player_tpos(tpos1.clone(), tpos2.clone()) {
+                    Ok(()) => (),
+                    Err(x) => log::error!("Failed to switch player tpos tpos1:{:?} tpos2:{:?} err:{}", tpos1, tpos2, x),
+                }
                 self.send_info_to_players().await;
             },
 
