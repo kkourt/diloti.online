@@ -355,20 +355,25 @@ impl<R: rand::Rng + Clone> Game<R> {
         // obligatory captures
         let val = ca.value();
         let mut forced_cards = vec![];
-        while let Some(te) = self.table.remove_entry_with_value(val) {
-            match te {
-                TableEntry::Card(c) => {
-                    forced_cards.push(c);
-                    //captured_cards.push(c);
-                },
-                TableEntry::Decl(mut d) => {
-                    for c in d.cards.drain(..).flatten() {
+
+        // only force captures if the handcard is not a figure. Check validation for more details
+        if !ca.handcard.rank.is_figure() {
+            while let Some(te) = self.table.remove_entry_with_value(val) {
+                match te {
+                    TableEntry::Card(c) => {
                         forced_cards.push(c);
                         //captured_cards.push(c);
-                    }
-                },
+                    },
+                    TableEntry::Decl(mut d) => {
+                        for c in d.cards.drain(..).flatten() {
+                            forced_cards.push(c);
+                            //captured_cards.push(c);
+                        }
+                    },
+                }
             }
         }
+
         captured_cards.extend_from_slice(&forced_cards[..]);
 
         // update scoring structures

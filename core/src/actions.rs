@@ -190,7 +190,7 @@ fn validate_laydown(card: Card, table: &Table) -> Result<(), String> {
 }
 
 impl CaptureAction {
-    pub fn validate(&self) -> Result<(), String> {
+    pub fn validate_capture(&self, table: &Table) -> Result<(), String> {
         if (self.tentries.len() == 0) || (self.tentries[0].len() == 0) {
             return Err("Invalid capture: empty".to_string());
         }
@@ -201,8 +201,32 @@ impl CaptureAction {
 
         for tvec in self.tentries.iter() {
             if tvec.iter().find(|x| x.is_decl()).is_some()  && tvec.len() < 1 {
-                return Err("Invalid capture: declarations can only be captured alone".to_string());
+                return Err("Invalid capture: declarations can only be captured on their own".to_string());
             }
+        }
+
+        if self.handcard.rank.is_figure() {
+            for te_vec in self.tentries.iter() {
+                if te_vec.len() > 1 {
+                    return Err("Invalid capture: Figures cannot be used to capture multiple cards".to_string());
+                }
+            }
+
+            let ncaptured = self.tentries.len();
+            let ntable = table.iter_cards_with_val(self.value()).count();
+            match (ncaptured, ntable) {
+                (1, 1) => (),
+                (1, 2) => (),
+                (2, 2) => return Err("invalid capture: if 2 same figures exist on the table, only one can be captured.".to_string()),
+                // For the two cases below, we could force the action as we do with other
+                // obligations, but this is tricky and also counter-intuitive to the player because
+                // it's a very special case, so we just invalidate the action.
+                (1, 3) => return Err("invalid capture: if 3 same figures exist on the table, all three must be captured.".to_string()),
+                (2, 3) => return Err("invalid capture: if 3 same figures exist on the table, all three must be captured.".to_string()),
+                (3, 3) => (),
+                _ => return Err("Huh?".to_string()),
+            }
+
         }
 
         Ok(())
@@ -263,7 +287,7 @@ impl PlayerAction {
         match (player_decl, self) {
             (None,    LayDown(c))  => validate_laydown(c.clone(), &view.table),
             (Some(_), LayDown(c))  => Err("Cannot lay down a card when a declaration of yours exists.".to_string()),
-            (_,       Capture(ca)) => ca.validate(),
+            (_,       Capture(ca)) => ca.validate_capture(&view.table),
             (None,    Declare(da)) => da.validate_decl(&view.table, &view.own_hand),
             (Some(d), Declare(da)) => da.validate_decl_continuation(&d, &view.table, &view.own_hand),
         }

@@ -4,11 +4,14 @@
 // vim: set expandtab softtabstop=4 tabstop=4 shiftwidth=4:
 //
 
+use std::convert::TryFrom;
+
 use crate::{
     repr::{TableRepr, TableEntryRepr, DeckRepr},
-    actions::{DeclAction, PlayerAction},
+    actions::{DeclAction, PlayerAction, CaptureAction},
     table::{Table, TableEntry, PlayerTpos},
-    game::{Game},
+    game::Game,
+    card::Card,
 };
 
 
@@ -84,4 +87,100 @@ fn no_two_decls() {
     let res = game.apply_action(tpos, act2);
     assert!(res.is_err());
     println!("table: {:?}", res);
+}
+
+#[test]
+fn two_figs_on_table() {
+    let rng = rand::thread_rng(); // not going to be used
+    let table_ = TableRepr::new("SK HK").parse().unwrap();
+    // NB: The D2 card is needed because otherwise, the game will end the the last table cards will
+    // end up in the scoring sheet
+    let hand_ = DeckRepr::new("DK D2").parse().unwrap();
+    let tpos = PlayerTpos(0);
+    let game = Game::new_1p_debug(rng, table_, hand_);
+    let hand = &game.players[0].hand;
+    let table = &game.table;
+    {
+        let act1 = PlayerAction::Capture(CaptureAction {
+            handcard: Card::try_from("DK").unwrap(),
+            tentries: vec![
+                vec![mk_te("SK")],
+                vec![mk_te("HK")],
+            ],
+        });
+        let res1 = game.apply_action(tpos, act1);
+        println!("res: {:?}", res1);
+        assert!(res1.is_err());
+    }
+    {
+        let act2 = PlayerAction::Capture(CaptureAction {
+            handcard: Card::try_from("DK").unwrap(),
+            tentries: vec![
+                vec![mk_te("HK")],
+            ],
+        });
+        println!("table before action: {:?}", game.table.entries);
+        let res2 = game.apply_action(tpos, act2);
+        println!("res2: {:?}", res2);
+        assert!(res2.is_ok());
+        let game = res2.unwrap();
+        println!("game after action: {:?}", game);
+        assert_eq!(game.table.entries, mk_table("SK").entries);
+    }
+}
+
+#[test]
+fn three_figs_on_table() {
+    let rng = rand::thread_rng(); // not going to be used
+    let table_ = TableRepr::new("SK HK CK").parse().unwrap();
+    // NB: The D2 card is needed because otherwise, the game will end the the last table cards will
+    // end up in the scoring sheet
+    let hand_ = DeckRepr::new("DK D2").parse().unwrap();
+    let tpos = PlayerTpos(0);
+    let game = Game::new_1p_debug(rng, table_, hand_);
+    let hand = &game.players[0].hand;
+    let table = &game.table;
+
+    {
+        let act = PlayerAction::Capture(CaptureAction {
+            handcard: Card::try_from("DK").unwrap(),
+            tentries: vec![
+                vec![mk_te("SK")],
+            ],
+        });
+        let res = game.apply_action(tpos, act);
+        println!("res: {:?}", res);
+        assert!(res.is_err());
+    }
+
+    {
+        let act = PlayerAction::Capture(CaptureAction {
+            handcard: Card::try_from("DK").unwrap(),
+            tentries: vec![
+                vec![mk_te("SK")],
+                vec![mk_te("HK")],
+            ],
+        });
+        let res = game.apply_action(tpos, act);
+        println!("res: {:?}", res);
+        assert!(res.is_err());
+    }
+
+    {
+        let act = PlayerAction::Capture(CaptureAction {
+            handcard: Card::try_from("DK").unwrap(),
+            tentries: vec![
+                vec![mk_te("SK")],
+                vec![mk_te("HK")],
+                vec![mk_te("CK")],
+            ],
+        });
+        println!("table before action: {:?}", game.table.entries);
+        let res = game.apply_action(tpos, act);
+        println!("res2: {:?}", res);
+        assert!(res.is_ok());
+        let game = res.unwrap();
+        println!("game after action: {:?}", game);
+        assert_eq!(game.table.entries, vec![]);
+    }
 }

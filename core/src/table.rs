@@ -212,6 +212,10 @@ impl Table {
         let pos = self.entries.iter().position(|x| x.value() == val)?;
         Some(self.entries.remove(pos))
     }
+
+    pub fn iter_cards_with_val(&self, val: u8) -> impl Iterator<Item=&TableEntry> {
+        self.entries.iter().filter(move |x| x.is_card() && x.value() == val)
+    }
 }
 
 impl std::fmt::Display for PlayerTpos {
