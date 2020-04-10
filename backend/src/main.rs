@@ -124,7 +124,7 @@ async fn start_player(
         }
     };
 
-    match player::player_setup(ws, game_tx, player_name).await {
+    match player::player_setup(game_id, ws, game_tx, player_name).await {
         Err(code) => rep_with_code("Error registering player into game", code),
         Ok(rep) => Ok(Box::new(rep)),
     }
@@ -140,6 +140,11 @@ async fn main() {
     // channel to directory task
     let dir_tx = directory::spawn_directory_task();
 
+    // route: /
+    let index_r = warp::get()
+        .and(warp::path::end())
+        .and(warp::fs::file("frontend/index.html")); // encoding does not seem to work here
+    /*
     let index: std::borrow::Cow<str> = match std::fs::read_to_string("frontend/index.html") {
         Err(x) => {
             log::error!("Failed to open index file: {:?}", x);
@@ -148,8 +153,6 @@ async fn main() {
         Ok(x) => x,
     }.into();
 
-    //
-    // route: /
     let index_r = warp::get()
         .and(
             warp::path::end().map(move || {
@@ -159,7 +162,7 @@ async fn main() {
                     .body(index_)
             })
         );
-        //.and(warp::fs::file("frontend/index.html")); // encoding does not seem to work here
+    */
 
     // route: /pkg
     let pkg_r = warp::path("pkg").and(warp::fs::dir("frontend/pkg/"));
@@ -178,7 +181,7 @@ async fn main() {
             .and_then(move |req| { create_game(req, dir_tx_.clone()) })
     };
 
-    // GET /ws/:game_id: -> websocket for joining the game
+    // GET /ws/:game_id:/:player_name:/ -> websocket for joining the game
     let connect_r = warp::path("ws")
         .and(warp::path::param())
         .and(warp::path::param())

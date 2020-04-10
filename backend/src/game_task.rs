@@ -11,12 +11,22 @@
 use core::srvcli;
 use crate::player_task::PlayerTaskTx;
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlayerTaskId(pub usize);
+
 /// Game task requests
 #[derive(Debug)]
 pub enum GameReq {
-    // Player name
+    /// Register a player to the game
     RegisterPlayer(PlayerTaskTx, String),
-    ClientReq(srvcli::PlayerId, srvcli::ClientMsg),
+    /// Forward a client request to the game task
+    ClientReq(PlayerTaskId, srvcli::ClientMsg),
+    /// Notify the server that the player task for handling the websocket connection has terminated
+    /// (typically due to user disconnect or an error).
+    PlayerTaskTerminated(PlayerTaskId),
+    /// Re-join a player to the game (tx, name), and name has to match an existing disconnected
+    /// player
+    ReconnectPlayer(PlayerTaskTx, String),
 }
 
 /// Channel for {<player_tasks>, ???} -> <game_task> communication

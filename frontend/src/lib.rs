@@ -697,7 +697,7 @@ impl LobbySt {
                 //log(format!("Received message {:?}", txt));
                 let srv_msg: ServerMsg = serde_json::from_str(&txt).unwrap();
                 self.lobby_info = Some(match srv_msg {
-                    ServerMsg::InLobby(x) => x,
+                    ServerMsg::LobbyUpdate(x) => x,
                     ServerMsg::GameUpdate(pview) => {
                         let lobby_info : &LobbyInfo = self.lobby_info
                             .as_ref()
@@ -782,6 +782,7 @@ enum TurnProgress {
 enum GamePhase {
     MyTurn(TurnProgress),
     OthersTurn(PlayerId),
+    PlayersDisconnected(Vec<PlayerId>),
     RoundDone,
     GameDone(Vec<core::ScoreSheet>),
 }
@@ -798,7 +799,7 @@ impl GamePhase {
             MyTurn(DeclaringWith(x,_)) => Some(*x),
             MyTurn(CapturingWith(x,_)) => Some(*x),
             MyTurn(ActionIssued(_)) => None,
-            RoundDone | GameDone(_) => None,
+            PlayersDisconnected(_) | RoundDone | GameDone(_) => None,
         }
     }
 
@@ -814,7 +815,7 @@ impl GamePhase {
             MyTurn(DeclaringWith(x, None)) => false,
             MyTurn(DeclaringWith(x, Some(db))) => db.has_tentry(tentry),
             MyTurn(CapturingWith(x, cb)) => cb.has_tentry(tentry),
-            RoundDone | GameDone(_) => false,
+            PlayersDisconnected(_) | RoundDone | GameDone(_) => false,
         }
     }
 }
@@ -822,8 +823,13 @@ impl GamePhase {
 impl From<(&LobbyInfo, &core::PlayerGameView)> for GamePhase {
     fn from(pieces: (&LobbyInfo, &core::PlayerGameView)) -> GamePhase {
         let (lobby_info, pview) = pieces;
-        match pview.state {
 
+        let disconnected_ps = lobby_info.disconnected_players();
+        if disconnected_ps.len() > 0 {
+            return GamePhase::PlayersDisconnected(disconnected_ps);
+        }
+
+        match pview.state {
             core::GameState::NextTurn(tpos) if tpos == lobby_info.my_tpos() => {
                 let msg = p!["Your turn to play (select a card from your hand)"];
                 GamePhase::MyTurn(TurnProgress::Nothing(msg))
@@ -905,11 +911,6 @@ impl GameSt {
         }
     }
 
-    pub fn new_view_from_server(&mut self, pview: core::PlayerGameView) {
-        self.view = pview;
-        self.phase = (&self.lobby_info, &self.view).into();
-    }
-
     fn action_issued(&self) -> bool {
         match self.phase {
             GamePhase::MyTurn(TurnProgress::ActionIssued(_)) => true,
@@ -978,7 +979,7 @@ impl GameSt {
                         Some(MyTurn(CardSelected(*x)))
                     },
 
-                    RoundDone | GameDone(_) => None,
+                    PlayersDisconnected(_) | RoundDone | GameDone(_) => None,
                 };
 
                 if let Some(x) = new_phase {
@@ -996,6 +997,9 @@ impl GameSt {
                     MyTurn(ActionIssued(_)) => None,
                     MyTurn(CardSelected(_)) => None,
                     MyTurn(DeclaringWith(cidx, None)) => None,
+                    RoundDone => None,
+                    PlayersDisconnected(_) => None,
+                    GameDone(_) => None,
 
                     MyTurn(DeclaringWith(cidx, Some(db))) => {
                         if is_selected {
@@ -1023,7 +1027,6 @@ impl GameSt {
                         None
                     },
 
-                    RoundDone | GameDone(_) => None,
                 };
 
                 if let Some(x) = new_phase {
@@ -1105,11 +1108,16 @@ impl GameSt {
             },
 
             ServerMsg::GameUpdate(pview) => {
-                self.new_view_from_server(pview);
+                self.view = pview;
+                self.phase = (&self.lobby_info, &self.view).into();
                 return None;
             },
 
-            _ => unimplemented!(),
+            ServerMsg::LobbyUpdate(linfo) => {
+                self.lobby_info = linfo;
+                self.phase = (&self.lobby_info, &self.view).into();
+                return None;
+            }
 
         }
     }
@@ -1247,6 +1255,19 @@ impl GameSt {
         ]
     }
 
+    fn view_players_disconnected(&self, ps: &Vec<PlayerId>) -> Node<Msg> {
+        let mut ul = ul![];
+        for pid in ps.iter() {
+            let player = self.lobby_info.get_player(*pid).expect("valid pid");
+            ul.add_child(span![player.name]);
+        }
+
+        div![
+            p!["Cannot continue. The following players are disconnected:"],
+            ul,
+        ]
+    }
+
     fn view_phase(&self) -> Node<Msg> {
         // TODO: if a user has a declaration on the table, be helpful about their possible actions
         // :)
@@ -1262,6 +1283,7 @@ impl GameSt {
             GamePhase::MyTurn(TurnProgress::ActionIssued(a)) => p!["Issued action. Waiting for server."],
             GamePhase::GameDone(sheets) => self.view_score(sheets),
             GamePhase::RoundDone => p!["Round done! Wait for new cards."],
+            GamePhase::PlayersDisconnected(ps) => self.view_players_disconnected(ps),
         };
         let mut phase = div![
             attrs!{At::Class => "container"},
@@ -1297,12 +1319,12 @@ impl GameSt {
         };
 
         let mut act_elem = match &la.action {
-            core::PlayerAction::LayDown(c) => span!["laid down their ", c.to_elem(),],
+            core::PlayerAction::LayDown(c) => span!["laid down ", c.to_elem(),],
             core::PlayerAction::Capture(ca) if la.xeri => {
                 let mut table_cards = ca.get_table_cards();
                 span!["made a «ξερή» capturing ",
                       iter_to_elem("", table_cards.drain(..), ""),
-                      " with their ",
+                      " with ",
                       ca.handcard.to_elem()
                 ]
             },
@@ -1310,22 +1332,22 @@ impl GameSt {
                 let mut table_cards = ca.get_table_cards();
                 span!["captured ",
                       iter_to_elem("", table_cards.drain(..), ""),
-                      " with their ",
+                      " with ",
                       ca.handcard.to_elem()
                 ]
             },
             core::PlayerAction::Declare(da) => {
                 match da.get_decl() {
                     None => span![
-                        format!("created a declaration of value {} with their ", da.value()),
+                        format!("created a declaration of value {} with ", da.value()),
                         da.handcard().to_elem(),
                     ],
                     Some(decl) if decl.value() < da.value() => span![
-                        format!("raised a declaration from {} to {} with their ", decl.value(), da.value()),
+                        format!("raised a declaration from {} to {} with ", decl.value(), da.value()),
                         da.handcard().to_elem(),
                     ],
                     Some(decl) if decl.value() == da.value() => span![
-                        format!("added to a declaration of value {} their ", da.value()),
+                        format!("added to a declaration of value {} a ", da.value()),
                         da.handcard().to_elem(),
                     ],
                     _ => panic!("Invalid decl"),
@@ -1343,14 +1365,17 @@ impl GameSt {
 
         let pname = self.lobby_info.player_from_tpos(la.player).unwrap().name.clone();
         div![
-            span![format!("Last action from {} {}: ", tpos_char(la.player), pname)],
+            span![format!("Last action from {}: ", pname)],
             act_elem
         ]
     }
 
     fn view(&self) -> Node<Msg> {
         match self.phase {
-            GamePhase::MyTurn(_) | GamePhase::OthersTurn(_) | GamePhase::RoundDone => {
+            GamePhase::MyTurn(_) |
+            GamePhase::OthersTurn(_) |
+            GamePhase::RoundDone |
+            GamePhase::PlayersDisconnected(_) => {
                 let players = self.view_players();
                 let table = self.view_table();
                 let hand = self.view_hand();

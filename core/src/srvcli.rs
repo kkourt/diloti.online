@@ -7,6 +7,7 @@
 use serde::{Deserialize, Serialize};
 use crate::{game, deck, table, actions, repr};
 
+pub use game::PlayerGameView;
 pub use table::PlayerTpos;
 
 /// Server <-> client interaction
@@ -44,12 +45,22 @@ pub struct PlayerInfo {
     pub tpos: PlayerTpos,
     /// player name
     pub name: String,
+    /// connected: is player connected to the server?
+    pub connected: bool,
 }
 
+/// PlayerId identifies a player in the lobby.
+///
+/// Specifically, it's value can be used to index players in the lobby to get information such as
+/// name and table position.
+//
+// NB: note that this means that the server want to swap PlayerIds, then it should update LobbyInfo
+// by sending a LobbyUpdate message.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-pub struct PlayerId(pub usize); // Player (internal) identifier
+pub struct PlayerId(pub usize);
 
 /// Lobby state info
+// NB: rename LobbyInfo to PlayersInfo
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LobbyInfo {
     pub players: Vec<PlayerInfo>,
@@ -68,8 +79,8 @@ pub struct LobbyInfo {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ServerMsg {
-    InLobby(LobbyInfo),
-    GameUpdate(game::PlayerGameView),
+    LobbyUpdate(LobbyInfo),
+    GameUpdate(PlayerGameView),
     InvalidAction(String),
 }
 
@@ -185,5 +196,13 @@ impl LobbyInfo {
             (4, 1) => vec![PlayerTpos(1), PlayerTpos(3)],
             _ => panic!("Unexpected number of players/teams"),
         }
+    }
+
+    pub fn disconnected_players(&self) -> Vec<PlayerId> {
+        self.players
+            .iter()
+            .enumerate()
+            .filter_map(|(i,p)| match p.connected { true => None, false => Some(PlayerId(i)) })
+            .collect()
     }
 }

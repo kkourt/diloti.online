@@ -9,13 +9,14 @@
  */
 
 use core::srvcli;
+use crate::game_task::PlayerTaskId;
 
 /// Information passed from the game task to the player task
 #[derive(Debug)]
 pub enum PlayerTaskMsg {
     /// This is the first message passed after registration.
     /// If ther registration is successful, it includes a player id that will never change.
-    RegistrationResult(Result<srvcli::PlayerId, String>),
+    RegistrationResult(Result<PlayerTaskId, String>),
     ForwardToClient(srvcli::ServerMsg),
 }
 
