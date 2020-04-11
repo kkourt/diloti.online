@@ -130,7 +130,7 @@ impl LobbyInfo {
     }
 
     pub fn all_ready(&self) -> bool {
-        return self.players.len() == self.nplayers as usize
+        self.players.iter().filter(|p| p.connected).count() == self.nplayers as usize
     }
 
     pub fn is_self(&self, pid: PlayerId) -> bool {

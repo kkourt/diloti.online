@@ -605,6 +605,10 @@ impl LobbySt {
                 vattrs.push("admin");
             }
 
+            if !player.connected {
+                vattrs.push("disconnected \u{2718}");
+            }
+
             let td_tpos = td![lobby_tpos_elem(lobby_info, tpos)];
             let td_name = td![player.name];
             let td_attrs = if vattrs.len() > 0 {
@@ -642,6 +646,17 @@ impl LobbySt {
                 attrs,
             ];
             div.add_child(start_button);
+        }
+
+        let disconnected = self.lobby_info.as_ref().map_or(vec![], |li| li.disconnected_players());
+        if disconnected.len() > 0 {
+            let lobby_info = self.lobby_info.as_ref().expect("valid lobby");
+            let mut ul = ul![];
+            for pid in disconnected.iter() {
+                let player = lobby_info.get_player(*pid).expect("valid pid");
+                ul.add_child(li![player.name]);
+            }
+            div.add_child(div![p!["The following players are disconnected:"], ul, ]);
         }
 
         div
@@ -930,7 +945,7 @@ impl GameSt {
         assert!(self.myturn());
         // reset phase
         let user_msg = div![
-            p![format!("Invalid play: {}", err)],
+            p![format!("Invalid play: {}", err), style!{"color" => "red"}],
             p!["Still your turn! Play a card from your hand."],
         ];
         self.phase = GamePhase::MyTurn(TurnProgress::Nothing(user_msg));
@@ -972,9 +987,14 @@ impl GameSt {
                     MyTurn(Nothing(_)) => Some(MyTurn(CardSelected(*x))),
                     MyTurn(ActionIssued(_)) => None,
 
-                    // If a hand card is already selected, clicking it again, will reset phase
-                    // progress
-                    MyTurn(CardSelected(prev_x))    |
+                    // if a card is selected, clicking the card will return to initial state
+                    MyTurn(CardSelected(prev_x)) => {
+                        let msg = p!["Your turn to play (select a card from your hand)"];
+                        Some(MyTurn(Nothing(msg)))
+                    },
+
+                    // if an action is selected, clicking on the selected card will reset the
+                    // action
                     MyTurn(DeclaringWith(prev_x,_)) |
                     MyTurn(CapturingWith(prev_x,_)) => {
                         Some(MyTurn(CardSelected(*x)))
@@ -1269,7 +1289,7 @@ impl GameSt {
         let mut ul = ul![];
         for pid in ps.iter() {
             let player = self.lobby_info.get_player(*pid).expect("valid pid");
-            ul.add_child(span![player.name]);
+            ul.add_child(li![player.name]);
         }
 
         div![
@@ -1391,7 +1411,8 @@ impl GameSt {
                 let hand = self.view_hand();
                 let phase = self.view_phase();
                 let last_action = self.view_last_action();
-                div![players, table, hand, phase, last_action]
+                let rem = p![format!("Remaining cards in the deck: {}", self.view.main_deck_sz)];
+                div![players, table, hand, phase, last_action, rem]
             },
 
             GamePhase::GameDone(_) => {

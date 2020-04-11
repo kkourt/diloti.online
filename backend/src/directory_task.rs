@@ -19,6 +19,8 @@ pub enum DirReq {
     CreateGame(GameConfig, oneshot::Sender<srvcli::CreateRep>),
     /// Request the game task for a given game
     GetGameHandle(GameId, oneshot::Sender<Option<GameTaskTx>>),
+    /// Drop the game
+    DropGame(GameId),
 }
 
 /// A channel to send requests to the directory task

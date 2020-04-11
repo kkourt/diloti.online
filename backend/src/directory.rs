@@ -59,6 +59,14 @@ impl Directory {
         }
     }
 
+    pub fn drop_game(&mut self, gid: GameId) {
+        let ret = self.ht.remove(&gid);
+        if ret.is_none() {
+            log::warn!("Request to drop nonexistent game ({}) ignored", gid.to_string());
+        }
+    }
+
+
     pub fn get_game_handle(&self, gid: GameId, rep_tx: oneshot::Sender<Option<GameTaskTx>>) {
         let rep : Option<GameTaskTx> = self.ht.get(&gid).map(|v| v.clone());
         if let Err(x) = rep_tx.send(rep) {
@@ -76,6 +84,10 @@ impl Directory {
 
                 DirReq::GetGameHandle(gid, rep_tx) => {
                     self.get_game_handle(gid, rep_tx);
+                }
+
+                DirReq::DropGame(gid) => {
+                    self.drop_game(gid);
                 }
             }
         }

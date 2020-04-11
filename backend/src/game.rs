@@ -22,7 +22,7 @@ use core::srvcli;
 use crate::{
     game_task::{GameReq, GameTaskRx, GameTaskTx, PlayerTaskId},
     player_task::{PlayerTaskMsg, PlayerTaskTx},
-    directory_task::DirTaskTx,
+    directory_task::{DirTaskTx, DirReq},
 };
 use rand::SeedableRng;
 type Rng = rand_pcg::Pcg64;
@@ -428,12 +428,11 @@ impl Game {
             }
         }
 
-        // We are done!
-        // send message GameFinished(
-        // TODO: close receiving channel
-        // TODO: unregister from directory
-        // return...
-        unimplemented!()
+        // try to drop game if possible
+        if let Err(x) = self.dir_tx.send(DirReq::DropGame(self.gid)).await {
+            log::error!("Error dropping game");
+        }
+        log::info!("Game task {} finalized", self.gid.to_string())
     }
 
     async fn task_init(&mut self, rep_tx: oneshot::Sender<srvcli::CreateRep>) {
