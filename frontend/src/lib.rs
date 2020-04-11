@@ -784,7 +784,7 @@ enum GamePhase {
     OthersTurn(PlayerId),
     PlayersDisconnected(Vec<PlayerId>),
     RoundDone,
-    GameDone(Vec<core::ScoreSheet>),
+    GameDone(Vec<(core::ScoreSheet, usize)>),
 }
 
 impl GamePhase {
@@ -893,6 +893,7 @@ enum InGameMsg {
     DeclareSetSum(u8),  // sum
     CaptureWith(usize),
     FinalizePhase,
+    ContinueGame,
 }
 
 
@@ -1096,6 +1097,15 @@ impl GameSt {
                     _ => unimplemented!(),
                 };
             },
+
+            InGameMsg::ContinueGame => {
+                let req = serde_json::to_string(&ClientMsg::StartGame).unwrap();
+                if let Err(x) = self.wsocket.ws.send_with_str(&req) {
+                    error!("Failed to send data to server");
+                    unimplemented!();
+                }
+                return None;
+            }
         }
     }
 
@@ -1281,7 +1291,7 @@ impl GameSt {
             GamePhase::MyTurn(TurnProgress::DeclaringWith(cidx, ts)) => self.view_declaration(*cidx, ts),
             GamePhase::MyTurn(TurnProgress::CapturingWith(cidx, cb)) => self.view_capture(*cidx, cb),
             GamePhase::MyTurn(TurnProgress::ActionIssued(a)) => p!["Issued action. Waiting for server."],
-            GamePhase::GameDone(sheets) => self.view_score(sheets),
+            GamePhase::GameDone(scores) => self.view_score(scores),
             GamePhase::RoundDone => p!["Round done! Wait for new cards."],
             GamePhase::PlayersDisconnected(ps) => self.view_players_disconnected(ps),
         };
@@ -1387,16 +1397,26 @@ impl GameSt {
             GamePhase::GameDone(_) => {
                 let phase = self.view_phase();
                 let last_action = self.view_last_action();
-                div![h3!["Game done!"], last_action, phase]
+
+                let cont = if self.lobby_info.am_i_admin() {
+                    let msg = Msg::InGame(InGameMsg::ContinueGame);
+                    let button = button![simple_ev(Ev::Click, msg), "Continue game"];
+                    p![button]
+                } else {
+                    p![""]
+                };
+
+                div![h3!["Game done!"], last_action, phase, cont]
+
             }
         }
     }
 
-    fn view_score(&self, sheets: &Vec<core::ScoreSheet>) -> Node<Msg> {
-        let mut div = div![ h3!["Game Score"] ];
+    fn view_score(&self, sheets: &Vec<(core::ScoreSheet, usize)>) -> Node<Msg> {
         assert!(sheets.len() == self.lobby_info.nteams());
-        let mut player_rows = vec![tr![th!["player(s)"], th!["score"], th!["points"]]];
-        for (i,ss) in sheets.iter().enumerate() {
+        let mut game_rows  = vec![tr![th!["player(s)"], th!["score"], th!["points"]]];
+        let mut total_rows = vec![tr![th!["player(s)"], th!["score"]]];
+        for (i, (ss, total_score)) in sheets.iter().enumerate() {
             let team_str = self.lobby_info
                 .team_tpos(i)
                 .iter()
@@ -1408,11 +1428,20 @@ impl GameSt {
             let players_td = td![team_str];
             let points_td = td![b![ss.score.to_string()], attrs!{At::Class => "score"}];
             let details_td = td![ss.to_elem()];
-            player_rows.push(tr![players_td, points_td, details_td])
+            let total_points_td = td![b![total_score.to_string()], attrs!{At::Class => "score"}];
+
+            game_rows.push(tr![players_td.clone(), points_td, details_td]);
+            total_rows.push(tr![players_td, total_points_td]);
         }
 
-        let table = table![player_rows, attrs!{At::Class => "scoring-table"}, ];
+        let mut div = div![ h3!["Game score"] ];
+        let table = table![game_rows, attrs!{At::Class => "scoring-table"}, ];
         div.add_child(table);
+
+        div.add_child(div![ h3!["Total score"] ]);
+        let table_total = table![total_rows, attrs!{At::Class => "scoring-table"}, ];
+        div.add_child(table_total);
+
         div
     }
 

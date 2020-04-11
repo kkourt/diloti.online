@@ -33,8 +33,8 @@ pub fn card_value(c: &Card) -> usize {
 pub struct ScoreSheet {
     pub nr_cards: usize,           // 4 points for the team with the more cards
     pub nr_xeres: usize,           // 10 points for each xeri
-    pub score_cards: Vec<Card>,  // scoring cards
-    pub score: usize,            // total score
+    pub score_cards: Vec<Card>,    // scoring cards
+    pub score: usize,              // total score
 }
 
 impl ScoreSheet {

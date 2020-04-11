@@ -352,7 +352,7 @@ impl Game {
                 Ok(())
             },
 
-            (InLobby, StartGame) => {
+            (st, StartGame) => {
                 if !self.is_player_admin(ptid) {
                     log::error!("Non-admin player attempted to start game. Ignoring.");
                     return Ok(());
@@ -363,8 +363,23 @@ impl Game {
                     return Ok(());
                 }
 
-                self.state = State::InGame;
-                self.send_game_update_to_players().await
+                match st {
+                    InLobby => {
+                        self.state = InGame;
+                        self.send_game_update_to_players().await
+                    },
+
+                    InGame if self.curr_game.state().is_game_done() => {
+                        self.curr_game.next_game();
+                        self.send_game_update_to_players().await
+                    },
+
+                    InGame => {
+                        log::error!("Trying to start game but game not done. Ignoring.");
+                        Ok(())
+                    },
+                }
+
             },
 
             (InGame, PlayerAction(action)) => {

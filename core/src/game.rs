@@ -58,10 +58,10 @@ pub struct Team {
 pub enum GameState {
     NextTurn(PlayerTpos),
     RoundDone,
-    GameDone(Vec<ScoreSheet>),
+    GameDone(Vec<(ScoreSheet, usize)>),
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug)]
 pub struct Game<R: rand::Rng + Clone> {
     pub(crate) table: Table,
     pub(crate) main_deck: Deck,
@@ -74,10 +74,18 @@ pub struct Game<R: rand::Rng + Clone> {
     pub (crate) first_player: PlayerTpos,
 
     pub(crate) last_action: Option<PerformedAction>,
+    initst_opt: Option<InitState>,
 
     rng: R,
 }
 
+// used so we can override it for debubbing purposes
+#[derive(Clone, Debug)]
+struct InitState {
+    deck: Deck,
+    table: Table,
+    hands: Vec<Deck>
+}
 
 /// This a player's point of view of the game
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -94,60 +102,65 @@ pub struct PlayerGameView {
 
 impl<R: rand::Rng + Clone> Game<R> {
 
-    pub fn new_1p(rng: R) -> Game<R> {
-        Self::init(1, rng)
-    }
 
     pub fn new_1p_debug(rng: R, table: Table, hand: Deck) -> Game<R> {
-        let players = vec![
-            Player { hand: hand },
-        ];
-        let first_p = PlayerTpos(0);
-
-        Game {
+        let initst = InitState {
+            deck: Deck::empty(),
             table: table,
-            main_deck: Deck::empty(),
-            players: players,
-            first_player: first_p,
-            state: GameState::NextTurn(first_p),
-            rng: rng,
-            teams: vec![Team::default()],
-            last_team_captured: 0, // NB: technically not true
-            last_action: None,
-        }
+            hands: vec![hand],
+        };
+        Self::init(1, Some(initst), rng)
+    }
+
+    pub fn new_1p(rng: R) -> Game<R> {
+        Self::init(1, None, rng)
     }
 
     pub fn new_2p(rng: R) -> Game<R> {
-        Self::init(2, rng)
+        Self::init(2, None, rng)
     }
 
     pub fn new_4p(rng: R) -> Game<R> {
-        Self::init(4, rng)
+        Self::init(4, None, rng)
     }
 
-    fn init(nplayers: usize, rng: R) -> Game<R> {
+    fn init(nplayers: usize, initst_opt: Option<InitState>, mut rng: R) -> Game<R> {
+
         assert!(nplayers == 1 || nplayers == 2 || nplayers == 4);
+
+        let mut initst = initst_opt.clone().unwrap_or_else(|| InitState::default(nplayers, &mut rng));
+        assert!(initst.hands.len() == nplayers);
         let nteams = if nplayers == 1 { 1 } else { 2 };
 
-        let deck = Deck::full_52();
         let first_player = PlayerTpos(0);
-
-        let mut game = Game {
-            table: Table { entries: vec![] },
-            main_deck: deck,
-            players: (0..nplayers).map( |_i| Player { hand: Deck::empty() } ).collect(),
+        let game = Game {
+            table: initst.table,
+            main_deck: initst.deck,
+            players: initst.hands.drain(..).map(|hd| Player { hand: hd }).collect(),
             first_player: first_player,
             state: GameState::NextTurn(first_player),
-            rng: rng,
             teams: (0..nteams).map( |_| Team::default()).collect(),
             last_team_captured: 0,
             last_action: None,
+            initst_opt: initst_opt,
+            rng: rng,
         };
 
-        game.shuffle_deck();
-        game.deal_hands();
-        game.deal_table();
         game
+    }
+
+    pub fn next_game(&mut self) {
+        let nplayers = self.players.len();
+        assert!(self.state.is_game_done());
+        let mut initst = self.initst_opt.clone().unwrap_or_else(|| InitState::default(nplayers, &mut self.rng));
+        assert!(initst.hands.len() == nplayers);
+        self.table = initst.table;
+        self.main_deck = initst.deck;
+        self.players = initst.hands.drain(..).map(|hd| Player { hand: hd }).collect();
+        self.first_player = PlayerTpos((self.first_player.0 + 1) % (nplayers as u8) );
+        self.last_action = None;
+
+        self.state = GameState::NextTurn(self.first_player);
     }
 
     fn team_idx(&mut self, tpos: PlayerTpos) -> usize {
@@ -170,10 +183,6 @@ impl<R: rand::Rng + Clone> Game<R> {
         self.teams[idx].captures.add_final_cards(cards, is_xeri);
     }
 
-    fn shuffle_deck(&mut self) {
-        self.main_deck.shuffle(&mut self.rng);
-    }
-
     pub fn new_round(&mut self) {
         assert!(self.state.is_round_done());
         self.deal_hands();
@@ -186,19 +195,10 @@ impl<R: rand::Rng + Clone> Game<R> {
         let hand_size = 6;
         for _ in 0..hand_size {
             for p in 0..self.players.len() {
-                let card = self.main_deck.pop().unwrap();
+                let card = self.main_deck.pop().expect("deal a handsize of 6");
                 self.players[p].hand.push(card)
             }
         }
-    }
-
-    fn deal_table(&mut self) {
-        let table_size = 4;
-        for _ in 0..table_size {
-            let card = self.main_deck.pop().unwrap();
-            self.table.entries.push(TableEntry::Card(card));
-        }
-
     }
 
     fn get_player(&self, tpos: PlayerTpos) -> Option<&Player> {
@@ -260,11 +260,11 @@ impl<R: rand::Rng + Clone> Game<R> {
             } else {
                 assert!(self.all_players_done());
                 self.finalize_captures();
-                let mut sheets = vec![];
+                let mut scores = vec![];
                 for team in self.teams.iter_mut() {
-                    sheets.push(team.update_score())
+                    scores.push(team.update_score())
                 }
-                self.state = GameState::GameDone(sheets);
+                self.state = GameState::GameDone(scores);
             }
         } else {
             panic!("Invalid call of next_turn()")
@@ -272,6 +272,12 @@ impl<R: rand::Rng + Clone> Game<R> {
     }
 
     pub fn apply_action(&self, tpos: PlayerTpos, action: PlayerAction) -> Result<Self, String> {
+
+        match self.state {
+            GameState::NextTurn(_) => (),
+            _ => return Err(format!("Invalid state for applying action ({:?})", self.state))
+        };
+
         // poor man's transaction: we copy everything, try to apply the action, and then either
         // return an error or the new state. This is because any errors during action application
         // could leave the game in an incosistent state. It should be possible to ensure
@@ -286,10 +292,6 @@ impl<R: rand::Rng + Clone> Game<R> {
 
     pub fn state(&self) -> &GameState {
         return &self.state
-    }
-
-    pub fn score(&self) -> Vec<ScoreSheet> {
-        self.teams.iter().map(|x| x.captures.score()).collect()
     }
 
     // NB: In case of an error, state might be incosistent.
@@ -528,13 +530,50 @@ impl GameState {
             _ => false,
         }
     }
+
+    pub fn is_game_done(&self) -> bool {
+        match self {
+            GameState::GameDone(_) => true,
+            _ => false,
+        }
+    }
 }
 
 impl Team {
-    pub fn update_score(&mut self) -> ScoreSheet {
+    pub fn update_score(&mut self) -> (ScoreSheet, usize) {
         let sheet = self.captures.score();
         self.score += sheet.score;
         self.captures = Captures::new();
-        sheet
+        (sheet, self.score)
+    }
+}
+
+impl InitState {
+    fn default<R: rand::Rng>(nplayers: usize, rng: &mut R) -> Self {
+        let mut deck  = Deck::full_52();
+        let mut table = Table { entries: vec![] };
+        let mut hands : Vec<Deck> = (0..nplayers).map(|_| Deck::empty()).collect();
+
+        deck.shuffle(rng);
+
+        let hand_size = 6;
+        for p in 0..nplayers {
+            for _ in 0..hand_size {
+                let card = deck.pop().unwrap();
+                hands[p].cards.push(card)
+            }
+        }
+
+        let table_size = 4;
+        for _ in 0..table_size {
+            let card = deck.pop().unwrap();
+            table.entries.push(TableEntry::Card(card));
+        }
+
+        InitState {
+            deck: deck,
+            table: table,
+            hands: hands,
+        }
     }
 }
