@@ -668,9 +668,14 @@ impl LobbySt {
         let join_href = format!("/?join={}", self.game_id);
         let body = if self.lobby_info.is_some() { self.view_players() } else { p!["--"] };
 
+        let a = a![join_name, attrs!{
+            At::Href => join_href,
+            At::Target => "_blank",
+            At::Rel => "noopener noreferrer",
+        }];
         div![
             h2!["Lobby"],
-            p!["join link: ", a![attrs! {At::Href => join_href}, join_name]],
+            p!["join link: ", a],
             p![""],
             body,
         ]
