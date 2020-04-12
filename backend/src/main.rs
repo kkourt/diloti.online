@@ -8,6 +8,7 @@ extern crate rand;
 extern crate rand_pcg;
 extern crate serde;
 extern crate serde_json;
+extern crate percent_encoding;
 
 mod directory_task;
 mod game_task;
@@ -16,6 +17,8 @@ mod directory;
 mod player;
 mod game;
 mod chararr_id;
+
+use percent_encoding::percent_decode_str;
 
 // use futures::future;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
@@ -186,7 +189,12 @@ async fn main() {
         .and(warp::path::param())
         .and(warp::path::param())
         .and(warp::ws()) // prepare the websocket handshake
-        .and_then(move |game_id, player_name, ws| start_player(game_id, player_name, ws, dir_tx.clone()) );
+        .and_then(
+            move |game_id, player_name: String, ws| {
+                let pname = percent_decode_str(&player_name).decode_utf8_lossy().to_string();
+                start_player(game_id, pname, ws, dir_tx.clone())
+            }
+        );
 
 
     let routes = index_r.or(pkg_r).or(hello_r).or(create_r).or(connect_r).with(log);
