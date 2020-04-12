@@ -68,12 +68,12 @@ impl PlayerTask {
     pub async fn handle_climsg(&mut self, cli_req: Option<Result<ws::Message, warp::Error>>) -> Result<(),()> {
         match cli_req {
             None => {
-                log::error!("Empty message from client websocket. Bailing out");
+                log::error!("Empty message from client websocket. Failing.");
                 Err(())
             }
 
             Some(Err(x)) => {
-                log::error!("Error in client websocket");
+                log::error!("Error in client websocket: {:?}. Failing.", x);
                 Err(())
             },
 
