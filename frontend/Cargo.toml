@@ -25,6 +25,8 @@ version = "0.3"
 features = [
   "Window",
   "Location",
+  "ErrorEvent",
+  "CloseEvent",
   "WebSocket",
 ]
 

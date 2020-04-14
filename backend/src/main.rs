@@ -97,6 +97,12 @@ async fn start_player(
     mut dir_tx: mpsc::Sender<directory_task::DirReq>,
 ) -> Result<Box<dyn warp::Reply>, std::convert::Infallible> {
 
+    // TODO: so all of this trouble for returning a proper HTTP error code was useless because as
+    // far as I can tell, there is no way to distinguish them from the client side. Indeed, I
+    // cannot even tell if the server is there or not, everything is a 1006 exit code for abnormal
+    // closure. It seems that the proper thing, would be to upgrade the WS connection, and just
+    // close it with a custom error code (e.g., within the 4000..4999 range).
+    //
     // shortcuts for some replies
     // NB: we a trait object to have a common return type. Not sure if there is a better way.
     let rep_with_code    = |s,c| Ok(Box::new(warp::reply::with_status(s,c)) as Box<dyn warp::Reply>);
@@ -113,13 +119,16 @@ async fn start_player(
         // create a oneshot channel for the reply
         let (tx, rx) = oneshot::channel::<Option<game_task::GameTaskTx>>();
         if let Err(x) = dir_tx.send(directory_task::DirReq::GetGameHandle(game_id, tx)).await {
-            eprintln!("Error sedding CreateGame request: {:?}", x);
+            log::error!("Error sending CreateGame request: {:?}", x);
             return rep_error("Failed to register player to game");
         }
 
         match rx.await {
             Ok(Some(x)) => x,
-            Ok(None) => return rep_unauthorized("invalid game id"),
+            Ok(None) => {
+                log::info!("Player ({}) requested to join invalid game id ({})", player_name, game_id.to_string());
+                return rep_unauthorized("invalid game id");
+            }
             Err(e) => {
                 log::error!("Failed to get result from directory: {:?}", e);
                 return rep_error("Failed to register player to game");

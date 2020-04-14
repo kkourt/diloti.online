@@ -56,26 +56,6 @@ pub fn get_string_from_storage(key: &str) -> String {
     }.unwrap_or("".to_string())
 }
 
-
-// NB: is this needed?
-/*
-impl Default for Model {
-    fn default() -> Self {
-        let player_name = get_string_from_storage("player_name");
-        let debug_hand = get_string_from_storage("debug_hand_cards");
-        let debug_table = get_string_from_storage("debug_table_cards");
-
-        Self::Init(InitSt {
-            nplayers: DEFAULT_NR_PLAYERS,
-            start_game_err: None,
-            player_name: player_name,
-            debug_hand: debug_hand,
-            debug_table: debug_table,
-        })
-    }
-}
-*/
-
 fn update(msg: Msg, mut model: &mut Model, orders: &mut impl Orders<Msg>) {
     //log(format!("update => {:?}", msg));
     let upd_ret = match (&mut model, msg) {

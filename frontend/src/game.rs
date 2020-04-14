@@ -5,6 +5,7 @@
 //
 
 use seed::{*, prelude::*};
+use web_sys;
 
 use core::{
     srvcli::{ClientMsg, ServerMsg, PlayerId, LobbyInfo},
@@ -12,9 +13,8 @@ use core::{
 
 use crate::{
     Msg, Model,
-    lobby::{LobbySt, },
     to_elem::{iter_to_elem, tpos_char, ToElem, },
-    ws::{WsEvent, WsState, Wsocket, },
+    ws::WsEvent,
 };
 
 /// Game state
@@ -23,8 +23,7 @@ pub struct GameSt {
     view: core::PlayerGameView,
     phase: GamePhase,
     lobby_info: LobbyInfo,
-
-    wsocket: std::rc::Rc<Wsocket>,
+    wsocket: web_sys::WebSocket,
     tmp_error_msg: String,
 }
 
@@ -124,15 +123,13 @@ impl From<(&LobbyInfo, &core::PlayerGameView)> for GamePhase {
 
 impl GameSt {
 
-
-    pub fn new(lobbyst: &LobbySt, pview: core::PlayerGameView) -> GameSt {
-        let lobby_info = lobbyst.lobby_info.as_ref().unwrap();
-        let phase: GamePhase = (lobby_info, &pview).into();
+    pub fn new(wsocket: web_sys::WebSocket, lobby_info: LobbyInfo, pview: core::PlayerGameView) -> GameSt {
+        let phase: GamePhase = (&lobby_info, &pview).into();
         GameSt {
             view: pview,
             phase: phase,
-            lobby_info: lobby_info.clone(),
-            wsocket: lobbyst.wsocket.clone(),
+            lobby_info: lobby_info,
+            wsocket: wsocket,
             tmp_error_msg: "".into(),
         }
     }
@@ -164,7 +161,7 @@ impl GameSt {
     fn issue_action(&mut self, act: core::PlayerAction) {
         let climsg = ClientMsg::PlayerAction(act.clone());
         let req = serde_json::to_string(&climsg).unwrap();
-        if let Err(x) = self.wsocket.ws.send_with_str(&req) {
+        if let Err(x) = self.wsocket.send_with_str(&req) {
             error!("Failed to send data to server");
             unimplemented!();
         }
@@ -330,7 +327,7 @@ impl GameSt {
 
             InGameMsg::ContinueGame => {
                 let req = serde_json::to_string(&ClientMsg::StartGame).unwrap();
-                if let Err(x) = self.wsocket.ws.send_with_str(&req) {
+                if let Err(x) = self.wsocket.send_with_str(&req) {
                     error!("Failed to send data to server");
                     unimplemented!();
                 }
@@ -364,17 +361,18 @@ impl GameSt {
 
     pub fn handle_ws_event(&mut self, ev: &WsEvent, _orders: &mut impl Orders<Msg>) -> Option<Model> {
         // log!("ev: {:?}", ev);
-        match (ev, self.wsocket.ws_state) {
-            (WsEvent::WsConnected(jv), _) => unimplemented!(),
-            (WsEvent::WsMessage(msg), WsState::Ready) => {
+        match ev {
+            // TODO: proper error handling
+            WsEvent::WsMessage(msg) => {
                 let txt = msg.data().as_string().expect("No data in server message");
                 //log(format!("Received message {:?}", txt));
                 let srv_msg: ServerMsg = serde_json::from_str(&txt).unwrap();
                 self.handle_server_message(srv_msg)
             },
-            // TODO: have some kind of error model... (or reconnect?)
+
+            // TODO: proper error handling
             // (WsEvent::WsClose(_), _) => _,
-            _ => panic!("Invalid websocket state/message ({:?}/{:?})", ev, self.wsocket.ws_state)
+            _ => unimplemented!(),
         };
 
         None
