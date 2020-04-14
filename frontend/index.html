@@ -155,18 +155,40 @@
   }
 
 
+  #footer {
+    margin-top: 50px;
+    font-size: small;
+  }
+
+  #footer p a {
+    color: black;
+    text-decoration: none;
+  }
+
+  #footer p a:hover {
+    text-decoration: underline;
+  }
     </style>
+
+
     <title>Δηλωτή online</title>
     </head>
 
     <body>
-        <h1> Δηλωτή online </h1>
+        <h1> Δηλωτή online</h1>
         <section id="app"></section>
         <script type="module">
             // https://rustwasm.github.io/docs/wasm-bindgen/examples/without-a-bundler.html
             import init from '/pkg/package.js';
             init('/pkg/package_bg.wasm');
         </script>
+
+
+      <!--
+      <div style="margin-top: 50px; font-size: small;">
+      <a href="mailto:kk@diloti.online">kk@diloti.online</a>.</p>
+      </div>
+      -->
     </body>
 
 </html>
