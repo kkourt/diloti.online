@@ -19,6 +19,7 @@ pub enum JoinMsg {
     SetPlayerName(String),
 }
 
+#[derive(Debug)]
 pub struct JoinSt {
     pub game_id: String,
     pub player_name: String,

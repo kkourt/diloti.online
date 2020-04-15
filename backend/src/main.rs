@@ -193,6 +193,11 @@ async fn main() {
             .and_then(move |req| { create_game(req, dir_tx_.clone()) })
     };
 
+    // /ingame is an internal thing used by the frontend. If we get a request for it (e.g., because
+    // the user reloaded the page) just redirect them to /.
+    let ingame_r = warp::path("ingame")
+        .map(|| { warp::redirect(warp::http::Uri::from_static("/")) });
+
     // GET /ws/:game_id:/:player_name:/ -> websocket for joining the game
     let connect_r = warp::path("ws")
         .and(warp::path::param())
@@ -206,7 +211,13 @@ async fn main() {
         );
 
 
-    let routes = index_r.or(pkg_r).or(hello_r).or(create_r).or(connect_r).with(log);
+    let routes = index_r
+        .or(hello_r)
+        .or(ingame_r)
+        .or(pkg_r)
+        .or(create_r)
+        .or(connect_r)
+        .with(log);
     let sockaddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 8080);
 
     warp::serve(routes).run(sockaddr).await;

@@ -30,6 +30,7 @@ pub enum InitMsg {
     DebugTableCards(String),
 }
 
+#[derive(Debug)]
 pub struct InitSt {
     /// Number of players
     pub nplayers: u8,
@@ -78,7 +79,10 @@ impl InitSt {
                     Ok(rep) => {
                         let ret = LobbySt::new(rep.game_id.clone(), self.player_name.clone(), orders,);
                         match ret {
-                            Ok(st) => return Some(Model::InLobby(st)),
+                            Ok(st) => {
+                                seed::push_route(seed::Url::new(vec!["ingame"]));
+                                return Some(Model::InLobby(st));
+                            },
                             Err(x) => {
                                 self.start_game_err = Some("Could not create new game".to_string());
                                 log!(format!("Error creating game: {:?}", x));

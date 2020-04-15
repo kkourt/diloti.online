@@ -477,6 +477,7 @@ pub fn spawn_game_task(
     rep_tx: oneshot::Sender<srvcli::CreateRep>,
 ) -> GameTaskTx {
     let (game_tx, game_rx) = mpsc::channel::<GameReq>(1024);
+    log::info!("Spawning game task {}", gid.to_string());
     let game = Game::new(gid, cfg, game_rx, dir_tx);
     // NB: we are detaching the game task by dropping its handle
     let game_task = tokio::spawn(game.task(rep_tx));

@@ -133,6 +133,7 @@ fn lobby_info_view_players(lobby_info: &LobbyInfo) -> Node<Msg> {
             table![player_rows, attrs!{At::Class => "lobby-players"}, ]
         ];
 
+        let disconnected = lobby_info.disconnected_players();
         if am_admin {
             let attrs = if !all_ready {
                 attrs!{At::Disabled => "true"}
@@ -145,16 +146,28 @@ fn lobby_info_view_players(lobby_info: &LobbyInfo) -> Node<Msg> {
                 attrs,
             ];
             div.add_child(start_button);
+        } else if disconnected.len() == 0 {
+            if all_ready {
+                div.add_child(p!["Waiting for admin to start the game"]);
+            } else {
+                div.add_child(p!["Waiting for other players to join"]);
+            }
         }
 
-        let disconnected = lobby_info.disconnected_players();
         if disconnected.len() > 0 {
             let mut ul = ul![];
             for pid in disconnected.iter() {
                 let player = lobby_info.get_player(*pid).expect("valid pid");
                 ul.add_child(li![player.name]);
             }
-            div.add_child(div![p!["The following players are disconnected:"], ul, ]);
+
+            //let hname = web_sys::window().expect("web_sys window").location().host().expect("location");
+            div.add_child(div![
+                p!["The following players have left:"],
+                ul,
+                p!["The game cannot start now :("],
+                p![a!["Start again", attrs!{At::Href => "/"}]],
+            ]);
         }
 
         div
@@ -382,5 +395,17 @@ impl LobbySt {
         };
 
         Ok(ret)
+    }
+}
+
+// Dropping this does not close the websocket by default, apparently, so we should do it.
+impl Drop for LobbySt {
+    fn drop(&mut self) {
+        let ws = match self.get_wsocket_mut() {
+            Some(ws) => ws,
+            None => return,
+        };
+
+        ws.close().unwrap_or(())
     }
 }

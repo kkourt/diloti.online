@@ -19,6 +19,7 @@ use crate::{
 
 /// Game state
 
+#[derive(Debug)]
 pub struct GameSt {
     view: core::PlayerGameView,
     phase: GamePhase,
@@ -39,6 +40,7 @@ pub enum InGameMsg {
     ContinueGame,
 }
 
+#[derive(Debug)]
 enum TurnProgress {
     Nothing(Node<Msg>),
     CardSelected(usize),
@@ -47,6 +49,7 @@ enum TurnProgress {
     ActionIssued(core::PlayerAction),
 }
 
+#[derive(Debug)]
 enum GamePhase {
     MyTurn(TurnProgress),
     OthersTurn(PlayerId),
@@ -502,7 +505,8 @@ impl GameSt {
         }
 
         div![
-            p!["Cannot continue. The following players are disconnected:"],
+            p!["The game cannot continue :("],
+            p!["The following players are disconnected:"],
             ul,
         ]
     }
@@ -785,5 +789,12 @@ impl GameSt {
         }
 
         div
+    }
+}
+
+// Dropping this does not close the websocket by default, apparently, so we should do it.
+impl Drop for GameSt {
+    fn drop(&mut self) {
+        self.wsocket.close().unwrap_or(())
     }
 }
