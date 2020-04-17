@@ -9,6 +9,7 @@
 
     <!--<link rel="icon" type="image/png" href="/public/favicon.png"> -->
 
+
     <style>
     div {
       padding-bottom: 5px;
@@ -160,13 +161,17 @@
     font-size: small;
   }
 
+  #footer p {
+    margin: 0;
+  }
+
   #footer p a {
     color: black;
-    text-decoration: none;
+    text-decoration: underline silver;
   }
 
   #footer p a:hover {
-    text-decoration: underline;
+    text-decoration: underline orange;
   }
     </style>
 
@@ -174,8 +179,10 @@
     <title>Δηλωτή online</title>
     </head>
 
+
     <body>
         <h1> Δηλωτή online</h1>
+
         <section id="app"></section>
         <script type="module">
             // https://rustwasm.github.io/docs/wasm-bindgen/examples/without-a-bundler.html

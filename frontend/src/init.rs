@@ -224,12 +224,36 @@ impl InitSt {
 
     fn footer(&self) -> Node<Msg> {
         let email = "kk@diloti.online";
-        let email_a = a![
-            email,
-            attrs!{At::Href => format!("mailto:{}", email)}
+        let email_a = a![email, attrs! {At::Href => format!("mailto:{}", email)}];
+        let gh_issues = "https://github.com/kkourt/diloti.online/";
+        let rules = "https://www.pagat.com/fishing/diloti.html";
+        let rules_a = a![
+            rules,
+            attrs! {At::Href => rules },
         ];
-        let p = p!["For comments and suggestions email me at ", email_a, "."];
-        let div = div![p, attrs!{At::Id => "footer"}];
+
+        let p_rules = p![
+            "For the rules, I followed mostly ",
+            rules_a,
+            " and the advice of our local ",
+            a!["expert", attrs!{At::Href => "https://www.instagram.com/ser.kostas/"}],
+            "."
+        ];
+        let p_variant = p![
+            "The variant implemented is one with \"forced captures\" and \"forced declarations\".",
+        ];
+        let p_gh = p![
+            "Feel free check the code, report issues, or add suggestions on ",
+            a!["github", attrs! {At::Href => gh_issues}],
+            ".",
+        ];
+        let p_email = p![
+            "You can also reach me by email at ",
+            email_a,
+            "."
+        ];
+
+        let div = div![p_rules, p_variant, p_gh, p_email, attrs! {At::Id => "footer"}];
         div
     }
 

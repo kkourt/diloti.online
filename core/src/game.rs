@@ -14,25 +14,14 @@ use super::table::{Table, Declaration, PlayerTpos, TableEntry};
 use super::actions::{PlayerAction, DeclAction, CaptureAction, PerformedAction};
 use super::scoring::{Captures, ScoreSheet};
 
-
-// Rules: we are using a variant where:
-//  - if a card can be added to a new declaration, it is automatically added (even if the player
-//  does not state it)
-//  - Capturing captures all cards and declarations on the table with the same value.
+//  Rules:
+//  - https://www.pagat.com/fishing/diloti.html
+//  We implement a variant with forced captures and also forced declarations.
 //
 // Extended rules:
 //  - https://www.pagat.com/fishing/diloti.html
 //  - https://cardgamesgr.blogspot.com/2014/07/diloti.html
 //  - http://alogomouris.blogspot.com/2011/02/blog-post_5755.html
-
-// Design notes: we move card arounds. The state of each card is implicit in which container it is
-// stored in. I wanted to avoid "copying" the cards between server and client. The two solutions I
-// came up with were: i) use indices and a global version for the game, ii) use "card copies" that
-// have the same contents as the cards but a different types that can be cloned. To simplify
-// things, however, I ended just copying Cards for now. Also, users send the server all the cards
-// when they want to designate a declaration on the table which can be optimized in future
-// versions.
-
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Player {
