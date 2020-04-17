@@ -29,7 +29,7 @@ macro_rules! define_chararr_id {
                 Self(rarr)
             }
 
-            pub fn from_string(s: &String) -> Option<Self> {
+            pub fn from_string(s: &str) -> Option<Self> {
                 if s.len() != $l {
                     return None
                 }

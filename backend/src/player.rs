@@ -5,22 +5,25 @@
 //
 //
 
-use warp::http::StatusCode;
 use warp::filters::ws;
 use tokio::time::Duration;
 
 use core::srvcli;
 
-use crate::game;
-use crate::game_task::{
-    PlayerTaskId,
-    GameReq,
-    GameTaskTx
-};
-use crate::player_task::{
-    PlayerTaskMsg,
-    PlayerTaskRx,
-    PlayerTaskMsg::{RegistrationResult, ForwardToClient}
+use crate::{
+    game,
+    directory_task,
+    game_task::{
+        PlayerTaskId,
+        GameReq,
+        GameTaskTx
+    },
+    player_task::{
+        PlayerTaskMsg,
+        PlayerTaskRx,
+        PlayerTaskTx,
+        PlayerTaskMsg::{RegistrationResult, ForwardToClient}
+    },
 };
 
 use futures::{SinkExt,StreamExt};
@@ -108,44 +111,118 @@ impl PlayerTask {
     }
 }
 
-pub async fn player_setup(
-    game_id: game::GameId,
-    ws: warp::ws::Ws,
-    mut game_tx: GameTaskTx,
+/// Contact directory task to get the tx endpoint for the game task
+async fn get_game_tx(
+    dir_tx: &mut directory_task::DirTaskTx,
+    gid_str: &str,
+) -> Result<GameTaskTx, String> {
+
+    let game_id = game::GameId::from_string(gid_str).ok_or("invalid game id")?;
+    // create a oneshot channel for the reply
+    let (tx, rx) = tokio::sync::oneshot::channel::<Option<GameTaskTx>>();
+    if let Err(x) = dir_tx.send(directory_task::DirReq::GetGameHandle(game_id, tx)).await {
+        log::error!("Error sending CreateGame request: {:?}", x);
+        return Err("Failed to register player to game".to_string());
+    }
+
+    match rx.await {
+        Ok(Some(x)) => Ok(x),
+        Ok(None) => {
+            log::info!("Player requested to join invalid game id ({})", game_id.to_string());
+            Err("Invalid game id".to_string())
+        },
+        Err(e) => {
+            log::error!("Failed to get result from directory: {:?}", e);
+            Err("Failed to register player to game".to_string())
+        }
+    }
+}
+
+/// Contact game task to register the player
+async fn register_player(
     player_name: String,
-) -> Result<impl warp::reply::Reply, StatusCode> {
-    // create player task channel
+    game_tx: &mut GameTaskTx,
+    player_tx: PlayerTaskTx,
+    player_rx: &mut PlayerTaskRx,
+) -> Result<PlayerTaskId, String> {
+    let req = GameReq::RegisterPlayer(player_tx, player_name);
+    if let Err(x) = game_tx.send(req).await {
+        log::error!("Error sending RegisterPlayer request: {:?}", x);
+        return Err("Failed to register player to game".to_string())
+    }
+
+    match player_rx.recv().await {
+        Some(RegistrationResult(Ok(x))) => Ok(x),
+        Some(RegistrationResult(Err(e))) => Err(e),
+        r => {
+            log::error!("Error sending RegisterPlayer request: {:?}", r);
+            Err("Failed to register player to game".to_string())
+        }
+    }
+}
+
+struct PlayerTaskArg {
+    pub self_rx: PlayerTaskRx,
+    pub game_tx: GameTaskTx,
+    pub pid: PlayerTaskId,
+}
+
+/// Setup everything we ned to run the player task.
+/// Returns a PlayerTask or a message to convey to the user in case of an error
+async fn do_player_setup(
+    game_id_s: &str,
+    player_name: &str,
+    mut dir_tx: &mut directory_task::DirTaskTx,
+) -> Result<PlayerTaskArg, String> {
+    let mut game_tx = get_game_tx(&mut dir_tx, game_id_s).await?;
     let (player_tx, mut player_rx) = tokio::sync::mpsc::channel::<PlayerTaskMsg>(1024);
+    let player_id = register_player(
+        player_name.to_string(),
+        &mut game_tx,
+        player_tx,
+        &mut player_rx).await?;
 
-    // register player and get player info from the game task
-    let pid: PlayerTaskId = {
-        let req = GameReq::RegisterPlayer(player_tx, player_name);
-        if let Err(x) = game_tx.send(req).await {
-            log::error!("Error sending RegisterPlayer request: {:?}", x);
-            return Err(StatusCode::INTERNAL_SERVER_ERROR);
-        }
+    Ok(PlayerTaskArg {
+        self_rx: player_rx,
+        game_tx: game_tx,
+        pid: player_id,
+    })
+}
 
-        match player_rx.recv().await {
-            Some(RegistrationResult(Ok(x))) => x,
-            Some(RegistrationResult(Err(e))) => return Err(StatusCode::CONFLICT),
-            r => {
-                log::error!("Error sending RegisterPlayer request: {:?}", r);
-                return Err(StatusCode::INTERNAL_SERVER_ERROR)
-            }
-        }
-    };
+
+pub async fn player_setup(
+    game_id_s: String,
+    ws: warp::ws::Ws,
+    player_name: String,
+    mut dir_tx: directory_task::DirTaskTx,
+) -> Result<impl warp::Reply, std::convert::Infallible> {
+
+    // create player task channel and perform the neccessary setup
+    let (player_tx, player_rx) = tokio::sync::mpsc::channel::<PlayerTaskMsg>(1024);
+    let ws_arg = do_player_setup(&game_id_s, &player_name, &mut dir_tx).await;
 
     // Here we define what will happen at a later point in time (when the protocol upgrade happens)
     // and we return rep which is a reply that will execute the upgrade and spawn a task with our
     // defined closure.
-    let rep = ws.on_upgrade(move |websocket: warp::filters::ws::WebSocket| async move {
-        let (ws_tx, ws_rx) : (WsTx, WsRx) = websocket.split();
-        let mut task = PlayerTask {
-            ws_tx: ws_tx,
-            ws_rx: ws_rx,
-            self_rx: player_rx,
-            game_tx: game_tx,
-            pid: pid.clone(),
+    let rep = ws.on_upgrade(move |mut websocket: warp::filters::ws::WebSocket| async move {
+        let mut task = match ws_arg {
+            Err(x) => {
+                // Send the error message with a custom code and return
+                log::info!("game:{}/pname:{} failed to setup player: {}.", &game_id_s, &player_name, &x);
+                let msg = ws::Message::close_with(4444u16, x);
+                websocket.send(msg).await.unwrap_or(());
+                return;
+            },
+            Ok(arg) => {
+                let (ws_tx, ws_rx) : (WsTx, WsRx) = websocket.split();
+                PlayerTask {
+                    ws_tx: ws_tx,
+                    ws_rx: ws_rx,
+                    self_rx: arg.self_rx,
+                    game_tx: arg.game_tx,
+                    pid: arg.pid
+                }
+            }
         };
 
         // We either:
@@ -171,7 +248,7 @@ pub async fn player_setup(
             };
         }
 
-        log::info!("game:{}/pid:{} player task returns", game_id.to_string(), task.pid.0);
+        log::info!("game:{}/pid:{} player task returns", game_id_s.to_string(), task.pid.0);
         // Attemt to send a player disconnected to the game task
         {
             let dur = Duration::from_millis(10);

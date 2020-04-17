@@ -281,8 +281,12 @@ impl LobbySt {
     pub fn handle_ws_event(&mut self, ev: &WsEvent, _orders: &mut impl Orders<Msg>) -> Option<Model> {
         // NB: once we fix the backend, we  can have a better explaination here.
         match ev {
-            WsEvent::WsClose(_) | WsEvent::WsError(_) => {
-                self.state = State::Error("Error: game (or server) no longer available.".to_string());
+            WsEvent::WsClose(ce) if ce.code() == 4444 => {
+                self.state = State::Error("Error: game no longer exists".to_string());
+                return None;
+            }
+            WsEvent::WsError(_) | WsEvent::WsClose(_) => {
+                self.state = State::Error("Error: failed to contact server.".to_string());
                 return None;
             }
             _ => (),
@@ -303,7 +307,7 @@ impl LobbySt {
                     WsEvent::WsMessage(msg) => {
                         match get_lobby_update(msg) {
                             Err(x) => {
-                                error!(format!("Error while expected LobbyUpdate: {}", x));
+                                error!(format!("Error while expecting LobbyUpdate: {}", x));
                                 State::Error("Error contacting server".to_string())
                             },
                             Ok(li) => {

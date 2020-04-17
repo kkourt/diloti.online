@@ -90,57 +90,6 @@ async fn create_game(req: srvcli::CreateReq, mut dir_tx: mpsc::Sender<directory_
     }
 }
 
-async fn start_player(
-    game_id_s: String,
-    player_name: String,
-    ws: warp::ws::Ws,
-    mut dir_tx: mpsc::Sender<directory_task::DirReq>,
-) -> Result<Box<dyn warp::Reply>, std::convert::Infallible> {
-
-    // TODO: so all of this trouble for returning a proper HTTP error code was useless because as
-    // far as I can tell, there is no way to distinguish them from the client side. Indeed, I
-    // cannot even tell if the server is there or not, everything is a 1006 exit code for abnormal
-    // closure. It seems that the proper thing, would be to upgrade the WS connection, and just
-    // close it with a custom error code (e.g., within the 4000..4999 range).
-    //
-    // shortcuts for some replies
-    // NB: we a trait object to have a common return type. Not sure if there is a better way.
-    let rep_with_code    = |s,c| Ok(Box::new(warp::reply::with_status(s,c)) as Box<dyn warp::Reply>);
-    let rep_unauthorized = |s|   Ok(Box::new(rep_with_unauthorized(s)) as Box<dyn warp::Reply>);
-    let rep_error        = |s|   Ok(Box::new(rep_with_internal_error(s)) as Box<dyn warp::Reply>);
-
-    let game_id = match game::GameId::from_string(&game_id_s) {
-        None => return rep_unauthorized("invalid game id"),
-        Some(x) => x,
-    };
-
-    // contact directory server to get the tx endpoint for the game task
-    let game_tx: game_task::GameTaskTx = {
-        // create a oneshot channel for the reply
-        let (tx, rx) = oneshot::channel::<Option<game_task::GameTaskTx>>();
-        if let Err(x) = dir_tx.send(directory_task::DirReq::GetGameHandle(game_id, tx)).await {
-            log::error!("Error sending CreateGame request: {:?}", x);
-            return rep_error("Failed to register player to game");
-        }
-
-        match rx.await {
-            Ok(Some(x)) => x,
-            Ok(None) => {
-                log::info!("Player ({}) requested to join invalid game id ({})", player_name, game_id.to_string());
-                return rep_unauthorized("invalid game id");
-            }
-            Err(e) => {
-                log::error!("Failed to get result from directory: {:?}", e);
-                return rep_error("Failed to register player to game");
-            }
-        }
-    };
-
-    match player::player_setup(game_id, ws, game_tx, player_name).await {
-        Err(code) => rep_with_code("Error registering player into game", code),
-        Ok(rep) => Ok(Box::new(rep)),
-    }
-}
 
 // game handler
 
@@ -206,10 +155,9 @@ async fn main() {
         .and_then(
             move |game_id, player_name: String, ws| {
                 let pname = percent_decode_str(&player_name).decode_utf8_lossy().to_string();
-                start_player(game_id, pname, ws, dir_tx.clone())
+                player::player_setup(game_id, ws, player_name, dir_tx.clone())
             }
         );
-
 
     let routes = index_r
         .or(hello_r)
