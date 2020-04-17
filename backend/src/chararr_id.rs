@@ -15,6 +15,7 @@ macro_rules! define_chararr_id {
         pub struct $t(pub [char; $l]);
 
         impl $t {
+            #[allow(dead_code)]
             pub fn len() -> usize { $l }
 
             pub fn new_random() -> Self {

@@ -67,7 +67,6 @@ struct Game {
     curr_game: core::Game<Rng>,
     nplayers: u8,
 
-    nteams: u8,
     next_player_task_id: usize,
     available_tpos: VecDeque<srvcli::PlayerTpos>,
 }
@@ -83,13 +82,7 @@ impl Game {
             (4, None)       => core::Game::new_4p(rng),
             (x, None)       => panic!("Incorrect number of players: {:?}", x),
             (1, Some(dbg))  => core::Game::new_1p_debug(rng, dbg.table, dbg.hand),
-            (x, _)          => panic!("Debugging mode allowed only for single player (for now)."),
-        };
-
-        let nteams = match cfg.nplayers {
-            2 | 4 => 2,
-            1     => 1,
-            _ => panic!("Unexpected number of players"),
+            (_x, _)          => panic!("Debugging mode allowed only for single player (for now)."),
         };
 
         Game {
@@ -100,13 +93,13 @@ impl Game {
             state: State::InLobby,
             curr_game: game,
             nplayers: nplayers,
-            nteams: nteams,
             next_player_task_id: 0,
             available_tpos: (0..nplayers).map(|x| srvcli::PlayerTpos(x)).collect(),
 
         }
     }
 
+    #[allow(dead_code)]
     fn ndisconnected(&self) -> usize {
         self.players.iter().filter(|p| p.is_disconnected()).count()
     }
@@ -169,6 +162,7 @@ impl Game {
         (0..self.players.len()).map(|i| srvcli::PlayerId(i))
     }
 
+    #[allow(dead_code)]
     fn player_by_pid(&mut self, pid: srvcli::PlayerId) -> &Player {
         self.players.get(pid.0).expect("valid PlayerId")
     }
@@ -277,7 +271,7 @@ impl Game {
         // handle error
         let ptid = match res {
             Err((mut tx,e)) => {
-                if let Err(x) = tx.send(RegistrationResult(Err(e))).await {
+                if let Err(_x) = tx.send(RegistrationResult(Err(e))).await {
                     log::warn!("Error sending erroneous registration result to player task")
                 }
                 return;
@@ -416,7 +410,7 @@ impl Game {
                     self.send_lobby_update_to_players().await;
                 }
 
-                GameReq::ReconnectPlayer(pl_tx, name) => {
+                GameReq::ReconnectPlayer(_pl_tx, _name) => {
                     unimplemented!()
                 }
             };
@@ -429,7 +423,7 @@ impl Game {
         }
 
         // try to drop game if possible
-        if let Err(x) = self.dir_tx.send(DirReq::DropGame(self.gid)).await {
+        if let Err(_x) = self.dir_tx.send(DirReq::DropGame(self.gid)).await {
             log::error!("Error dropping game");
         }
         log::info!("Game task {} finalized", self.gid.to_string())
@@ -480,7 +474,7 @@ pub fn spawn_game_task(
     log::info!("Spawning game task {}", gid.to_string());
     let game = Game::new(gid, cfg, game_rx, dir_tx);
     // NB: we are detaching the game task by dropping its handle
-    let game_task = tokio::spawn(game.task(rep_tx));
+    let _game_task = tokio::spawn(game.task(rep_tx));
     game_tx
 }
 

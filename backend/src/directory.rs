@@ -69,7 +69,7 @@ impl Directory {
 
     pub fn get_game_handle(&self, gid: GameId, rep_tx: oneshot::Sender<Option<GameTaskTx>>) {
         let rep : Option<GameTaskTx> = self.ht.get(&gid).map(|v| v.clone());
-        if let Err(x) = rep_tx.send(rep) {
+        if let Err(_x) = rep_tx.send(rep) {
             log::error!("Error sending game handle")
         }
     }
@@ -98,6 +98,6 @@ impl Directory {
 pub fn spawn_directory_task() -> DirTaskTx {
     let (dir_tx, dir_rx) = tokio::sync::mpsc::channel::<DirReq>(1024);
     let dir = Directory::new(dir_rx, dir_tx.clone());
-    let dir_task = tokio::spawn(dir.task());
+    let _dir_task = tokio::spawn(dir.task());
     dir_tx
 }

@@ -26,6 +26,7 @@ pub enum GameReq {
     PlayerTaskTerminated(PlayerTaskId),
     /// Re-join a player to the game (tx, name), and name has to match an existing disconnected
     /// player
+    #[allow(dead_code)] // TODO
     ReconnectPlayer(PlayerTaskTx, String),
 }
 

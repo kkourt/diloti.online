@@ -1,7 +1,3 @@
-// XXX: until code stabilizes...
-#![allow(dead_code)]
-#![allow(unused_variables)]
-
 //#[macro_use]
 extern crate log;
 extern crate rand;
@@ -29,31 +25,21 @@ use warp::Filter;
 
 use core::srvcli;
 
-// Here's the idea.
-// We want to build a server for playing a game
-// The game is simple: each player takes actions in incrementing a counter
-// each game has two players.
-//
+// Notes:
 // There is the directory actor that controls a mapping from id -> games
 // There is a game actor which manages the state for every game
-// There is a client actor that manages the state for every client
+// There is a players actor that manages the state for every client (player)
 //
-// There is no real authentication. Everything happens with private URLs
-// A client that creates a game gets a management URL for the game.
-//  Within this URL, the managing client can sent invitations to other clients (via unique URLs)
-
-// /create_game -> <game_id>
-//
-// /game/<game_id>/<management_id>
-// /game/<game_id>/<player1_id>
-// /game/<game_id>/<player2_id>
-
+// URLs:
+// create game: /create_game -> <game_id>
+// connect to game: /ws/<game_id>/<player_name>
 
 fn rep_with_internal_error<T: warp::Reply>(reply: T) -> warp::reply::WithStatus<T> {
     let code = warp::http::StatusCode::INTERNAL_SERVER_ERROR;
     return warp::reply::with_status(reply, code);
 }
 
+#[allow(dead_code)]
 fn rep_with_unauthorized<T: warp::Reply>(reply: T) -> warp::reply::WithStatus<T> {
     let code = warp::http::StatusCode::UNAUTHORIZED;
     return warp::reply::with_status(reply, code);
@@ -64,6 +50,7 @@ fn rep_with_ok<T: warp::Reply>(reply: T) -> warp::reply::WithStatus<T> {
     return warp::reply::with_status(reply, code);
 }
 
+#[allow(dead_code)]
 fn rep_with_conflict<T: warp::Reply>(reply: T) -> warp::reply::WithStatus<T> {
     let code = warp::http::StatusCode::CONFLICT;
     return warp::reply::with_status(reply, code);
@@ -155,7 +142,7 @@ async fn main() {
         .and_then(
             move |game_id, player_name: String, ws| {
                 let pname = percent_decode_str(&player_name).decode_utf8_lossy().to_string();
-                player::player_setup(game_id, ws, player_name, dir_tx.clone())
+                player::player_setup(game_id, ws, pname, dir_tx.clone())
             }
         );
 

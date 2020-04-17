@@ -1,7 +1,3 @@
-// XXX: until code stabilizes...
-#![allow(dead_code)]
-#![allow(unused_variables)]
-
 extern crate rand;
 extern crate rand_pcg;
 extern crate web_sys;
@@ -23,8 +19,6 @@ use lobby::{LobbyMsg, LobbySt};
 use join::{JoinSt, JoinMsg};
 use game::{GameSt, InGameMsg};
 use ws::{WsEvent};
-
-type XRng = rand_pcg::Pcg64;
 
 const DEFAULT_NR_PLAYERS: u8 = 2;
 
@@ -139,7 +133,7 @@ impl Default for Model {
     }
 }
 
-fn after_mount(url: Url, orders: &mut impl Orders<Msg>) -> AfterMount<Model> {
+fn after_mount(_url: Url, _orders: &mut impl Orders<Msg>) -> AfterMount<Model> {
     let href = web_sys::window().unwrap().location().href().expect("href not found");
     let url = url::Url::parse(&href).expect("invalid url");
     let join_game_id = url.query_pairs().find(|(k,_v)| k == "join").map(|(_k,v)| v);

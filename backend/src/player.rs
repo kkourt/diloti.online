@@ -30,8 +30,6 @@ use futures::{SinkExt,StreamExt};
 
 type WsTx = futures::stream::SplitSink<ws::WebSocket, ws::Message>;
 type WsRx = futures::stream::SplitStream<ws::WebSocket>;
-type SelfRx = u32;
-type GaTx = u32;
 
 struct PlayerTask {
     pub ws_tx: WsTx,
@@ -198,7 +196,6 @@ pub async fn player_setup(
 ) -> Result<impl warp::Reply, std::convert::Infallible> {
 
     // create player task channel and perform the neccessary setup
-    let (player_tx, player_rx) = tokio::sync::mpsc::channel::<PlayerTaskMsg>(1024);
     let ws_arg = do_player_setup(&game_id_s, &player_name, &mut dir_tx).await;
 
     // Here we define what will happen at a later point in time (when the protocol upgrade happens)

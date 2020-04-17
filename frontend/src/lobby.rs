@@ -61,7 +61,6 @@ fn lobby_tpos_elem(lobby_info: &LobbyInfo, tpos: PlayerTpos) -> Node<Msg> {
         }
     };
 
-    let tpos_str = tpos.0.to_string();
     let mut select_opts = vec![];
     for i in 0..lobby_info.nplayers {
         let tpos_i = PlayerTpos(i);
@@ -270,7 +269,7 @@ impl LobbySt {
             },
         };
 
-        if let Err(x) = ws.send_with_str(&req) {
+        if let Err(_x) = ws.send_with_str(&req) {
             error!("Failed to send data to server");
             self.state = State::Error("Failed to contact server".to_string());
         }

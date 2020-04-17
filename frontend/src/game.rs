@@ -82,10 +82,10 @@ impl GamePhase {
             OthersTurn(_) => false,
             MyTurn(ActionIssued(_)) => false,
             MyTurn(Nothing(_)) => false,
-            MyTurn(CardSelected(x)) => false,
-            MyTurn(DeclaringWith(x, None)) => false,
-            MyTurn(DeclaringWith(x, Some(db))) => db.has_tentry(tentry),
-            MyTurn(CapturingWith(x, cb)) => cb.has_tentry(tentry),
+            MyTurn(CardSelected(_)) => false,
+            MyTurn(DeclaringWith(_, None)) => false,
+            MyTurn(DeclaringWith(_, Some(db))) => db.has_tentry(tentry),
+            MyTurn(CapturingWith(_, cb)) => cb.has_tentry(tentry),
             PlayersDisconnected(_) | RoundDone | GameDone(_) => false,
         }
     }
@@ -164,7 +164,7 @@ impl GameSt {
     fn issue_action(&mut self, act: core::PlayerAction) {
         let climsg = ClientMsg::PlayerAction(act.clone());
         let req = serde_json::to_string(&climsg).unwrap();
-        if let Err(x) = self.wsocket.send_with_str(&req) {
+        if let Err(_) = self.wsocket.send_with_str(&req) {
             error!("Failed to send data to server");
             unimplemented!();
         }
@@ -198,15 +198,15 @@ impl GameSt {
                     MyTurn(ActionIssued(_)) => None,
 
                     // if a card is selected, clicking the card will return to initial state
-                    MyTurn(CardSelected(prev_x)) => {
+                    MyTurn(CardSelected(_prev_x)) => {
                         let msg = p!["Your turn to play (select a card from your hand)"];
                         Some(MyTurn(Nothing(msg)))
                     },
 
                     // if an action is selected, clicking on the selected card will reset the
                     // action
-                    MyTurn(DeclaringWith(prev_x,_)) |
-                    MyTurn(CapturingWith(prev_x,_)) => {
+                    MyTurn(DeclaringWith(_prev_x,_)) |
+                    MyTurn(CapturingWith(_prev_x,_)) => {
                         Some(MyTurn(CardSelected(*x)))
                     },
 
@@ -227,12 +227,12 @@ impl GameSt {
                     MyTurn(Nothing(_)) => None,
                     MyTurn(ActionIssued(_)) => None,
                     MyTurn(CardSelected(_)) => None,
-                    MyTurn(DeclaringWith(cidx, None)) => None,
+                    MyTurn(DeclaringWith(_cidx, None)) => None,
                     RoundDone => None,
                     PlayersDisconnected(_) => None,
                     GameDone(_) => None,
 
-                    MyTurn(DeclaringWith(cidx, Some(db))) => {
+                    MyTurn(DeclaringWith(_cidx, Some(db))) => {
                         if is_selected {
                             // NB: we could do something smarter here
                             db.reset()
@@ -245,7 +245,7 @@ impl GameSt {
                         None
                     },
 
-                    MyTurn(CapturingWith(prev_x,cb)) => {
+                    MyTurn(CapturingWith(_prev_x,cb)) => {
                         if is_selected {
                             // NB: we could do something smarter here
                             cb.reset()
@@ -312,13 +312,13 @@ impl GameSt {
 
             InGameMsg::FinalizePhase => {
                 match &self.phase {
-                    MyTurn(DeclaringWith(cidx, Some(ds))) => {
+                    MyTurn(DeclaringWith(_cidx, Some(ds))) => {
                         let action = ds.make_action();
                         self.issue_action(action);
                         return None;
                     },
 
-                    MyTurn(CapturingWith(cidx, cb)) => {
+                    MyTurn(CapturingWith(_cidx, cb)) => {
                         let action = cb.make_action();
                         self.issue_action(action);
                         return None;
@@ -330,7 +330,7 @@ impl GameSt {
 
             InGameMsg::ContinueGame => {
                 let req = serde_json::to_string(&ClientMsg::StartGame).unwrap();
-                if let Err(x) = self.wsocket.send_with_str(&req) {
+                if let Err(_x) = self.wsocket.send_with_str(&req) {
                     error!("Failed to send data to server");
                     unimplemented!();
                 }
@@ -523,7 +523,7 @@ impl GameSt {
             GamePhase::MyTurn(TurnProgress::CardSelected(cidx)) => self.view_selected_card(*cidx),
             GamePhase::MyTurn(TurnProgress::DeclaringWith(cidx, ts)) => self.view_declaration(*cidx, ts),
             GamePhase::MyTurn(TurnProgress::CapturingWith(cidx, cb)) => self.view_capture(*cidx, cb),
-            GamePhase::MyTurn(TurnProgress::ActionIssued(a)) => p!["Issued action. Waiting for server."],
+            GamePhase::MyTurn(TurnProgress::ActionIssued(_a)) => p!["Issued action. Waiting for server."],
             GamePhase::GameDone(scores) => self.view_score(scores),
             GamePhase::RoundDone => p!["Round done! Wait for new cards."],
             GamePhase::PlayersDisconnected(ps) => self.view_players_disconnected(ps),
@@ -711,7 +711,7 @@ impl GameSt {
         let card = &self.view.own_hand.cards[cidx];
 
         // NB: we can use that to filter user choices.
-        let sum_set = self.view.iter_hand_cards()
+        let _sum_set = self.view.iter_hand_cards()
             .filter(|c| *c != card && !c.rank.is_figure() && c.rank.0 > card.rank.0)
             .map(|c| c.rank.0)
             .collect::<std::collections::BTreeSet<u8>>();
