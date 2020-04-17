@@ -10,6 +10,15 @@ workspace = false
 command = "cargo"
 args = ["build"]
 
+[tasks.fix_perms]
+description = "Fix permissions"
+script = [
+'''
+chmod go+r index.html
+chmod go+rX -R pkg
+'''
+]
+
 [tasks.compile_release]
 description = "Build, with the --release flag"
 workspace = false
@@ -31,7 +40,7 @@ args = ["build", "--target", "web", "--out-name", "package"]
 [tasks.build]
 description = "Build, and create wasms"
 workspace = false
-dependencies = ["compile", "create_wasm"]
+dependencies = ["compile", "create_wasm", "fix_perms"]
 
 [tasks.build_release]
 description = "Build, and create wasms, with the release flag"
